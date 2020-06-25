@@ -101,14 +101,13 @@ static const char hex[16] = "0123456789ABCDEF";
  * Copy the content of an entry into a buffer, removing quotes, and possibly
  * translating environment variables.
  */
-static void PROFILE_CopyEntry( LPWSTR buffer, LPCWSTR value, int len,
-                               BOOL strip_quote )
+static void PROFILE_CopyEntry( LPWSTR buffer, LPCWSTR value, int len )
 {
     WCHAR quote = '\0';
 
     if(!buffer) return;
 
-    if (strip_quote && ((*value == '\'') || (*value == '\"')))
+    if (*value == '\'' || *value == '\"')
     {
         if (value[1] && (value[strlenW(value)-1] == *value)) quote = *value++;
     }
@@ -857,16 +856,26 @@ static BOOL PROFILE_Open( LPCWSTR filename, BOOL write_access )
  * Returns all keys of a section.
  * If return_values is TRUE, also include the corresponding values.
  */
-static INT PROFILE_GetSection( PROFILESECTION *section, LPCWSTR section_name,
+static INT PROFILE_GetSection( const WCHAR *filename, LPCWSTR section_name,
 			       LPWSTR buffer, UINT len, BOOL return_values )
 {
+    PROFILESECTION *section;
     PROFILEKEY *key;
 
     if(!buffer) return 0;
 
     TRACE("%s,%p,%u\n", debugstr_w(section_name), buffer, len);
 
-    while (section)
+    EnterCriticalSection( &PROFILE_CritSect );
+
+    if (!PROFILE_Open( filename, FALSE ))
+    {
+        LeaveCriticalSection( &PROFILE_CritSect );
+        buffer[0] = 0;
+        return 0;
+    }
+
+    for (section = CurProfile->section; section; section = section->next)
     {
         if (!strcmpiW( section->name, section_name ))
         {
@@ -877,19 +886,22 @@ static INT PROFILE_GetSection( PROFILESECTION *section, LPCWSTR section_name,
                 if (!*key->name && !key->value) continue;  /* Skip empty lines */
                 if (IS_ENTRY_COMMENT(key->name)) continue;  /* Skip comments */
                 if (!return_values && !key->value) continue;  /* Skip lines w.o. '=' */
-                PROFILE_CopyEntry( buffer, key->name, len - 1, 0 );
+                lstrcpynW( buffer, key->name, len - 1 );
                 len -= strlenW(buffer) + 1;
                 buffer += strlenW(buffer) + 1;
 		if (len < 2)
 		    break;
 		if (return_values && key->value) {
 			buffer[-1] = '=';
-			PROFILE_CopyEntry ( buffer, key->value, len - 1, 0 );
+                    lstrcpynW( buffer, key->value, len - 1 );
 			len -= strlenW(buffer) + 1;
 			buffer += strlenW(buffer) + 1;
                 }
             }
             *buffer = '\0';
+
+            LeaveCriticalSection( &PROFILE_CritSect );
+
             if (len <= 1)
                 /*If either lpszSection or lpszKey is NULL and the supplied
                   destination buffer is too small to hold all the strings,
@@ -902,9 +914,11 @@ static INT PROFILE_GetSection( PROFILESECTION *section, LPCWSTR section_name,
             }
             return oldlen - len;
         }
-        section = section->next;
     }
     buffer[0] = buffer[1] = '\0';
+
+    LeaveCriticalSection( &PROFILE_CritSect );
+
     return 0;
 }
 
@@ -948,64 +962,6 @@ static INT PROFILE_GetSectionNames( LPWSTR buffer, UINT len )
     *buf='\0';
     return buf-buffer;
 }
-
-
-/***********************************************************************
- *           PROFILE_GetString
- *
- * Get a profile string.
- *
- * Tests with GetPrivateProfileString16, W95a,
- * with filled buffer ("****...") and section "set1" and key_name "1" valid:
- * section	key_name	def_val		res	buffer
- * "set1"	"1"		"x"		43	[data]
- * "set1"	"1   "		"x"		43	[data]		(!)
- * "set1"	"  1  "'	"x"		43	[data]		(!)
- * "set1"	""		"x"		1	"x"
- * "set1"	""		"x   "		1	"x"		(!)
- * "set1"	""		"  x   "	3	"  x"		(!)
- * "set1"	NULL		"x"		6	"1\02\03\0\0"
- * "set1"	""		"x"		1	"x"
- * NULL		"1"		"x"		0	""		(!)
- * ""		"1"		"x"		1	"x"
- * NULL		NULL		""		0	""
- *
- *
- */
-static INT PROFILE_GetString( LPCWSTR section, LPCWSTR key_name,
-                              LPCWSTR def_val, LPWSTR buffer, UINT len )
-{
-    PROFILEKEY *key = NULL;
-    static const WCHAR empty_strW[] = { 0 };
-
-    if(!buffer || !len) return 0;
-
-    if (!def_val) def_val = empty_strW;
-    if (key_name)
-    {
-        key = PROFILE_Find( &CurProfile->section, section, key_name, FALSE, FALSE);
-        PROFILE_CopyEntry( buffer, (key && key->value) ? key->value : def_val,
-                           len, TRUE );
-        TRACE("(%s,%s,%s): returning %s\n",
-              debugstr_w(section), debugstr_w(key_name),
-              debugstr_w(def_val), debugstr_w(buffer) );
-        return strlenW( buffer );
-    }
-    /* no "else" here ! */
-    if (section)
-    {
-        INT ret = PROFILE_GetSection(CurProfile->section, section, buffer, len, FALSE);
-        if (!buffer[0]) /* no luck -> def_val */
-        {
-            PROFILE_CopyEntry(buffer, def_val, len, TRUE);
-            ret = strlenW(buffer);
-        }
-        return ret;
-    }
-    buffer[0] = '\0';
-    return 0;
-}
-
 
 /***********************************************************************
  *           PROFILE_SetString
@@ -1087,45 +1043,57 @@ INT WINAPI GetPrivateProfileStringW( LPCWSTR section, LPCWSTR entry,
 				     LPCWSTR def_val, LPWSTR buffer,
 				     UINT len, LPCWSTR filename )
 {
+    static const WCHAR emptyW[] = {0};
     int		ret;
     LPWSTR	defval_tmp = NULL;
+    const WCHAR *p;
 
     TRACE("%s,%s,%s,%p,%u,%s\n", debugstr_w(section), debugstr_w(entry),
           debugstr_w(def_val), buffer, len, debugstr_w(filename));
 
-    /* strip any trailing ' ' of def_val. */
-    if (def_val)
+    if (!buffer || !len) return 0;
+    if (!def_val) def_val = emptyW;
+    if (!section) return GetPrivateProfileSectionNamesW( buffer, len, filename );
+    if (!entry)
     {
-        LPCWSTR p = def_val + strlenW(def_val) - 1;
-
-        while (p > def_val && *p == ' ')
-            p--;
-
-        if (p >= def_val)
+        ret = PROFILE_GetSection( filename, section, buffer, len, FALSE );
+        if (!buffer[0])
         {
-            int vlen = (int)(p - def_val) + 1;
-
-            defval_tmp = HeapAlloc(GetProcessHeap(), 0, (vlen + 1) * sizeof(WCHAR));
-            memcpy(defval_tmp, def_val, vlen * sizeof(WCHAR));
-            defval_tmp[vlen] = '\0';
-            def_val = defval_tmp;
+            PROFILE_CopyEntry( buffer, def_val, len );
+            ret = strlenW( buffer );
         }
+        return ret;
+    }
+
+    /* strip any trailing ' ' of def_val. */
+    p = def_val + strlenW(def_val) - 1;
+
+    while (p > def_val && *p == ' ') p--;
+
+    if (p >= def_val)
+    {
+        int vlen = (int)(p - def_val) + 1;
+
+        defval_tmp = HeapAlloc(GetProcessHeap(), 0, (vlen + 1) * sizeof(WCHAR));
+        memcpy(defval_tmp, def_val, vlen * sizeof(WCHAR));
+        defval_tmp[vlen] = '\0';
+        def_val = defval_tmp;
     }
 
     RtlEnterCriticalSection( &PROFILE_CritSect );
 
-    if (PROFILE_Open( filename, FALSE )) {
-	if (section == NULL)
-            ret = PROFILE_GetSectionNames(buffer, len);
-	else 
-	    /* PROFILE_GetString can handle the 'entry == NULL' case */
-            ret = PROFILE_GetString( section, entry, def_val, buffer, len );
-    } else if (buffer && def_val) {
+    if (PROFILE_Open( filename, FALSE ))
+    {
+        PROFILEKEY *key = PROFILE_Find( &CurProfile->section, section, entry, FALSE, FALSE );
+        PROFILE_CopyEntry( buffer, (key && key->value) ? key->value : def_val, len );
+        TRACE("-> %s\n", debugstr_w( buffer ));
+        ret = strlenW( buffer );
+    }
+    else
+    {
        lstrcpynW( buffer, def_val, len );
        ret = strlenW( buffer );
     }
-    else
-       ret = 0;
 
     RtlLeaveCriticalSection( &PROFILE_CritSect );
 
@@ -1274,8 +1242,6 @@ UINT WINAPI GetPrivateProfileIntA( LPCSTR section, LPCSTR entry,
 INT WINAPI GetPrivateProfileSectionW( LPCWSTR section, LPWSTR buffer,
 				      DWORD len, LPCWSTR filename )
 {
-    int ret = 0;
-
     if (!section || !buffer)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -1284,14 +1250,7 @@ INT WINAPI GetPrivateProfileSectionW( LPCWSTR section, LPWSTR buffer,
 
     TRACE("(%s, %p, %d, %s)\n", debugstr_w(section), buffer, len, debugstr_w(filename));
 
-    RtlEnterCriticalSection( &PROFILE_CritSect );
-
-    if (PROFILE_Open( filename, FALSE ))
-        ret = PROFILE_GetSection(CurProfile->section, section, buffer, len, TRUE);
-
-    RtlLeaveCriticalSection( &PROFILE_CritSect );
-
-    return ret;
+    return PROFILE_GetSection( filename, section, buffer, len, TRUE );
 }
 
 /***********************************************************************

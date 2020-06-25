@@ -40,19 +40,11 @@
 
 #define MAX_NT_PATH_LENGTH 277
 
-#define MAX_DOS_DRIVES 26
-
 #if defined(__i386__) || defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
 static const UINT_PTR page_size = 0x1000;
 #else
 extern UINT_PTR page_size DECLSPEC_HIDDEN;
 #endif
-
-struct drive_info
-{
-    dev_t dev;
-    ino_t ino;
-};
 
 extern NTSTATUS close_handle( HANDLE ) DECLSPEC_HIDDEN;
 
@@ -72,26 +64,15 @@ extern LPCSTR debugstr_ObjectAttributes(const OBJECT_ATTRIBUTES *oa) DECLSPEC_HI
 /* init routines */
 extern void version_init(void) DECLSPEC_HIDDEN;
 extern void debug_init(void) DECLSPEC_HIDDEN;
-extern TEB *thread_init( SIZE_T *info_size, BOOL *suspend ) DECLSPEC_HIDDEN;
+extern TEB *thread_init( SIZE_T *info_size ) DECLSPEC_HIDDEN;
 extern void actctx_init(void) DECLSPEC_HIDDEN;
-extern void fill_cpu_info(void) DECLSPEC_HIDDEN;
 extern void heap_set_debug_flags( HANDLE handle ) DECLSPEC_HIDDEN;
 extern void init_unix_codepage(void) DECLSPEC_HIDDEN;
 extern void init_locale( HMODULE module ) DECLSPEC_HIDDEN;
 extern void init_user_process_params( SIZE_T data_size ) DECLSPEC_HIDDEN;
-extern char **build_envp( const WCHAR *envW ) DECLSPEC_HIDDEN;
 extern NTSTATUS restart_process( RTL_USER_PROCESS_PARAMETERS *params, NTSTATUS status ) DECLSPEC_HIDDEN;
 
-extern int __wine_main_argc;
-extern char **__wine_main_argv;
-extern WCHAR **__wine_main_wargv;
-
 /* server support */
-extern const char *build_dir DECLSPEC_HIDDEN;
-extern const char *data_dir DECLSPEC_HIDDEN;
-extern const char *config_dir DECLSPEC_HIDDEN;
-extern timeout_t server_start_time DECLSPEC_HIDDEN;
-extern unsigned int server_cpus DECLSPEC_HIDDEN;
 extern BOOL is_wow64 DECLSPEC_HIDDEN;
 extern NTSTATUS alloc_object_attributes( const OBJECT_ATTRIBUTES *attr, struct object_attributes **ret,
                                          data_size_t *ret_len ) DECLSPEC_HIDDEN;
@@ -114,11 +95,7 @@ extern const struct unix_funcs *unix_funcs DECLSPEC_HIDDEN;
 /* file I/O */
 extern NTSTATUS server_get_unix_name( HANDLE handle, ANSI_STRING *unix_name ) DECLSPEC_HIDDEN;
 extern void init_directories(void) DECLSPEC_HIDDEN;
-extern unsigned int DIR_get_drives_info( struct drive_info info[MAX_DOS_DRIVES] ) DECLSPEC_HIDDEN;
 
-/* virtual memory */
-extern void virtual_fill_image_information( const pe_image_info_t *pe_info,
-                                            SECTION_IMAGE_INFORMATION *info ) DECLSPEC_HIDDEN;
 extern struct _KUSER_SHARED_DATA *user_shared_data DECLSPEC_HIDDEN;
 
 /* locale */
@@ -162,8 +139,6 @@ static inline struct ntdll_thread_data *ntdll_get_thread_data(void)
 {
     return (struct ntdll_thread_data *)&NtCurrentTeb()->GdiTebBatch;
 }
-
-extern SYSTEM_CPU_INFORMATION cpu_info DECLSPEC_HIDDEN;
 
 #define HASH_STRING_ALGORITHM_DEFAULT  0
 #define HASH_STRING_ALGORITHM_X65599   1

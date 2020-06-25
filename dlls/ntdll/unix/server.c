@@ -100,18 +100,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(server);
 #define SOCKETNAME "socket"        /* name of the socket file */
 #define LOCKNAME   "lock"          /* name of the lock file */
 
-#ifdef __i386__
-static const enum cpu_type client_cpu = CPU_x86;
-#elif defined(__x86_64__)
-static const enum cpu_type client_cpu = CPU_x86_64;
-#elif defined(__arm__)
-static const enum cpu_type client_cpu = CPU_ARM;
-#elif defined(__aarch64__)
-static const enum cpu_type client_cpu = CPU_ARM64;
-#else
-#error Unsupported CPU
-#endif
-
 static const BOOL is_win64 = (sizeof(void *) > sizeof(int));
 
 static const char *server_dir;
@@ -999,8 +987,8 @@ static int remove_fd_from_cache( HANDLE handle )
  *
  * The returned unix_fd should be closed iff needs_close is non-zero.
  */
-int CDECL server_get_unix_fd( HANDLE handle, unsigned int wanted_access, int *unix_fd,
-                              int *needs_close, enum server_fd_type *type, unsigned int *options )
+int server_get_unix_fd( HANDLE handle, unsigned int wanted_access, int *unix_fd,
+                        int *needs_close, enum server_fd_type *type, unsigned int *options )
 {
     sigset_t sigset;
     obj_handle_t fd_handle;

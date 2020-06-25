@@ -28,9 +28,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(amstream);
 
 static const WCHAR sink_id[] = L"I{A35FF56A-9FDA-11D0-8FDF-00C04FD9189D}";
 
-static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectDrawSurface *surface,
-    const RECT *rect, IDirectDrawStreamSample **ddraw_stream_sample);
-
 struct ddraw_stream
 {
     IAMMediaStream IAMMediaStream_iface;
@@ -50,6 +47,9 @@ struct ddraw_stream
     IMemAllocator *allocator;
     AM_MEDIA_TYPE mt;
 };
+
+static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDrawSurface *surface,
+    const RECT *rect, IDirectDrawStreamSample **ddraw_stream_sample);
 
 static inline struct ddraw_stream *impl_from_IAMMediaStream(IAMMediaStream *iface)
 {
@@ -401,12 +401,15 @@ static HRESULT WINAPI ddraw_IDirectDrawMediaStream_SetDirectDraw(IDirectDrawMedi
 }
 
 static HRESULT WINAPI ddraw_IDirectDrawMediaStream_CreateSample(IDirectDrawMediaStream *iface,
-        IDirectDrawSurface *surface, const RECT *rect, DWORD dwFlags,
-        IDirectDrawStreamSample **ppSample)
+        IDirectDrawSurface *surface, const RECT *rect, DWORD flags,
+        IDirectDrawStreamSample **sample)
 {
-    TRACE("(%p)->(%p,%s,%x,%p)\n", iface, surface, wine_dbgstr_rect(rect), dwFlags, ppSample);
+    struct ddraw_stream *stream = impl_from_IDirectDrawMediaStream(iface);
 
-    return ddrawstreamsample_create(iface, surface, rect, ppSample);
+    TRACE("stream %p, surface %p, rect %s, flags %#x, sample %p.\n",
+            stream, surface, wine_dbgstr_rect(rect), flags, sample);
+
+    return ddrawstreamsample_create(stream, surface, rect, sample);
 }
 
 static HRESULT WINAPI ddraw_IDirectDrawMediaStream_GetTimePerFrame(IDirectDrawMediaStream *iface,
@@ -959,7 +962,7 @@ struct ddraw_sample
 {
     IDirectDrawStreamSample IDirectDrawStreamSample_iface;
     LONG ref;
-    IMediaStream *parent;
+    struct ddraw_stream *parent;
     IDirectDrawSurface *surface;
     RECT rect;
 };
@@ -1011,7 +1014,6 @@ static ULONG WINAPI ddraw_sample_Release(IDirectDrawStreamSample *iface)
     {
         if (sample->surface)
             IDirectDrawSurface_Release(sample->surface);
-        IMediaStream_Release(sample->parent);
         HeapFree(GetProcessHeap(), 0, sample);
     }
 
@@ -1021,9 +1023,17 @@ static ULONG WINAPI ddraw_sample_Release(IDirectDrawStreamSample *iface)
 /*** IStreamSample methods ***/
 static HRESULT WINAPI ddraw_sample_GetMediaStream(IDirectDrawStreamSample *iface, IMediaStream **media_stream)
 {
-    FIXME("(%p)->(%p): stub\n", iface, media_stream);
+    struct ddraw_sample *sample = impl_from_IDirectDrawStreamSample(iface);
 
-    return E_NOTIMPL;
+    TRACE("sample %p, media_stream %p.\n", sample, media_stream);
+
+    if (!media_stream)
+        return E_POINTER;
+
+    IAMMediaStream_AddRef(&sample->parent->IAMMediaStream_iface);
+    *media_stream = (IMediaStream *)&sample->parent->IAMMediaStream_iface;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ddraw_sample_GetSampleTimes(IDirectDrawStreamSample *iface, STREAM_TIME *start_time,
@@ -1102,7 +1112,7 @@ static const struct IDirectDrawStreamSampleVtbl DirectDrawStreamSample_Vtbl =
     ddraw_sample_SetRect
 };
 
-static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectDrawSurface *surface,
+static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDrawSurface *surface,
     const RECT *rect, IDirectDrawStreamSample **ddraw_stream_sample)
 {
     struct ddraw_sample *object;
@@ -1116,8 +1126,7 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
 
     object->IDirectDrawStreamSample_iface.lpVtbl = &DirectDrawStreamSample_Vtbl;
     object->ref = 1;
-    object->parent = (IMediaStream*)parent;
-    IMediaStream_AddRef(object->parent);
+    object->parent = parent;
 
     if (surface)
     {
@@ -1129,7 +1138,7 @@ static HRESULT ddrawstreamsample_create(IDirectDrawMediaStream *parent, IDirectD
         DDSURFACEDESC desc;
         IDirectDraw *ddraw;
 
-        hr = IDirectDrawMediaStream_GetDirectDraw(parent, &ddraw);
+        hr = IDirectDrawMediaStream_GetDirectDraw(&parent->IDirectDrawMediaStream_iface, &ddraw);
         if (FAILED(hr))
         {
             IDirectDrawStreamSample_Release(&object->IDirectDrawStreamSample_iface);

@@ -21,6 +21,7 @@
 #include "wine/debug.h"
 #include "evr.h"
 #include "d3d9.h"
+#include "dxva2api.h"
 #include "mfapi.h"
 #include "mferror.h"
 
@@ -47,6 +48,9 @@ struct video_mixer
     struct input_stream inputs[MAX_MIXER_INPUT_STREAMS];
     unsigned int input_ids[MAX_MIXER_INPUT_STREAMS];
     unsigned int input_count;
+
+    IDirect3DDeviceManager9 *device_manager;
+
     CRITICAL_SECTION cs;
 };
 
@@ -151,6 +155,8 @@ static ULONG WINAPI video_mixer_transform_Release(IMFTransform *iface)
             if (mixer->inputs[i].attributes)
                 IMFAttributes_Release(mixer->inputs[i].attributes);
         }
+        if (mixer->device_manager)
+            IDirect3DDeviceManager9_Release(mixer->device_manager);
         DeleteCriticalSection(&mixer->cs);
         free(mixer);
     }
@@ -373,7 +379,7 @@ static HRESULT WINAPI video_mixer_transform_AddInputStreams(IMFTransform *iface,
 static HRESULT WINAPI video_mixer_transform_GetInputAvailableType(IMFTransform *iface, DWORD id, DWORD index,
         IMFMediaType **type)
 {
-    FIXME("%p, %u, %u, %p.\n", iface, id, index, type);
+    TRACE("%p, %u, %u, %p.\n", iface, id, index, type);
 
     return E_NOTIMPL;
 }
@@ -386,11 +392,76 @@ static HRESULT WINAPI video_mixer_transform_GetOutputAvailableType(IMFTransform 
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI video_mixer_transform_SetInputType(IMFTransform *iface, DWORD id, IMFMediaType *type, DWORD flags)
+static HRESULT video_mixer_init_dxva_videodesc(IMFMediaType *media_type, DXVA2_VideoDesc *video_desc)
 {
-    FIXME("%p, %u, %p, %#x.\n", iface, id, type, flags);
+    const MFVIDEOFORMAT *video_format;
+    IMFVideoMediaType *video_type;
+    BOOL is_compressed = TRUE;
+    HRESULT hr = S_OK;
 
-    return E_NOTIMPL;
+    if (FAILED(IMFMediaType_QueryInterface(media_type, &IID_IMFVideoMediaType, (void **)&video_type)))
+        return MF_E_INVALIDMEDIATYPE;
+
+    video_format = IMFVideoMediaType_GetVideoFormat(video_type);
+    IMFVideoMediaType_IsCompressedFormat(video_type, &is_compressed);
+
+    if (!video_format || !video_format->videoInfo.dwWidth || !video_format->videoInfo.dwHeight || is_compressed)
+    {
+        hr = MF_E_INVALIDMEDIATYPE;
+        goto done;
+    }
+
+    memset(video_desc, 0, sizeof(*video_desc));
+    video_desc->SampleWidth = video_format->videoInfo.dwWidth;
+    video_desc->SampleWidth = video_format->videoInfo.dwHeight;
+    video_desc->Format = video_format->surfaceInfo.Format;
+
+done:
+    IMFVideoMediaType_Release(video_type);
+
+    return hr;
+}
+
+static HRESULT WINAPI video_mixer_transform_SetInputType(IMFTransform *iface, DWORD id, IMFMediaType *media_type, DWORD flags)
+{
+    struct video_mixer *mixer = impl_from_IMFTransform(iface);
+    IDirectXVideoProcessorService *service;
+    DXVA2_VideoDesc video_desc;
+    HRESULT hr = E_NOTIMPL;
+    HANDLE handle;
+
+    TRACE("%p, %u, %p, %#x.\n", iface, id, media_type, flags);
+
+    if (id)
+    {
+        FIXME("Unimplemented for substreams.\n");
+        return E_NOTIMPL;
+    }
+
+    EnterCriticalSection(&mixer->cs);
+
+    if (!mixer->device_manager)
+        hr = MF_E_NOT_INITIALIZED;
+    else
+    {
+        if (SUCCEEDED(hr = IDirect3DDeviceManager9_OpenDeviceHandle(mixer->device_manager, &handle)))
+        {
+            if (SUCCEEDED(hr = IDirect3DDeviceManager9_GetVideoService(mixer->device_manager, handle,
+                    &IID_IDirectXVideoProcessorService, (void **)&service)))
+            {
+                if (SUCCEEDED(hr = video_mixer_init_dxva_videodesc(media_type, &video_desc)))
+                {
+                    FIXME("Probe for supported devices.\n");
+                    hr = E_NOTIMPL;
+                }
+            }
+            IDirect3DDeviceManager9_CloseDeviceHandle(mixer->device_manager, handle);
+        }
+    }
+
+    LeaveCriticalSection(&mixer->cs);
+
+    return hr;
 }
 
 static HRESULT WINAPI video_mixer_transform_SetOutputType(IMFTransform *iface, DWORD id, IMFMediaType *type, DWORD flags)
@@ -444,9 +515,32 @@ static HRESULT WINAPI video_mixer_transform_ProcessEvent(IMFTransform *iface, DW
 
 static HRESULT WINAPI video_mixer_transform_ProcessMessage(IMFTransform *iface, MFT_MESSAGE_TYPE message, ULONG_PTR param)
 {
-    FIXME("%p, %u, %#lx.\n", iface, message, param);
+    struct video_mixer *mixer = impl_from_IMFTransform(iface);
+    HRESULT hr = S_OK;
 
-    return E_NOTIMPL;
+    TRACE("%p, %u, %#lx.\n", iface, message, param);
+
+    switch (message)
+    {
+        case MFT_MESSAGE_SET_D3D_MANAGER:
+
+            EnterCriticalSection(&mixer->cs);
+
+            if (mixer->device_manager)
+                IDirect3DDeviceManager9_Release(mixer->device_manager);
+            mixer->device_manager = NULL;
+            if (param)
+                hr = IUnknown_QueryInterface((IUnknown *)param, &IID_IDirect3DDeviceManager9, (void **)&mixer->device_manager);
+
+            LeaveCriticalSection(&mixer->cs);
+
+            break;
+        default:
+            WARN("Message not handled %d.\n", message);
+            hr = E_NOTIMPL;
+    }
+
+    return hr;
 }
 
 static HRESULT WINAPI video_mixer_transform_ProcessInput(IMFTransform *iface, DWORD id, IMFSample *sample, DWORD flags)

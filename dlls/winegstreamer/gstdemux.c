@@ -1022,6 +1022,9 @@ static void init_new_decoded_pad(GstElement *bin, GstPad *pad, struct gstdemux *
             goto out;
         }
 
+        /* Avoid expensive color matrix conversions. */
+        gst_util_set_object_arg(G_OBJECT(vconv), "matrix-mode", "none");
+
         /* GStreamer outputs RGB video top-down, but DirectShow expects bottom-up. */
         if (!(flip = gst_element_factory_make("videoflip", NULL)))
         {
@@ -1677,17 +1680,19 @@ static HRESULT gstdecoder_source_get_media_type(struct gstdemux_source *pin,
 {
     static const GstVideoFormat video_formats[] =
     {
-        /* Roughly ordered by preference from videoflip. */
+        /* Try to prefer YUV formats over RGB ones. Most decoders output in the
+         * YUV color space, and it's generally much less expensive for
+         * videoconvert to do YUV -> YUV transformations. */
         GST_VIDEO_FORMAT_AYUV,
-        GST_VIDEO_FORMAT_BGRA,
-        GST_VIDEO_FORMAT_BGRx,
-        GST_VIDEO_FORMAT_BGR,
         GST_VIDEO_FORMAT_I420,
         GST_VIDEO_FORMAT_YV12,
         GST_VIDEO_FORMAT_YUY2,
         GST_VIDEO_FORMAT_UYVY,
         GST_VIDEO_FORMAT_YVYU,
         GST_VIDEO_FORMAT_NV12,
+        GST_VIDEO_FORMAT_BGRA,
+        GST_VIDEO_FORMAT_BGRx,
+        GST_VIDEO_FORMAT_BGR,
     };
 
     if (!index)

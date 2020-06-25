@@ -1301,8 +1301,8 @@ static struct hlsl_type *expr_common_type(struct hlsl_type *t1, struct hlsl_type
     return new_hlsl_type(NULL, type, base, dimx, dimy);
 }
 
-struct hlsl_ir_node *implicit_conversion(struct hlsl_ir_node *node, struct hlsl_type *dst_type,
-        struct source_location *loc)
+struct hlsl_ir_node *add_implicit_conversion(struct list *instrs, struct hlsl_ir_node *node,
+        struct hlsl_type *dst_type, struct source_location *loc)
 {
     struct hlsl_type *src_type = node->data_type;
     struct hlsl_ir_expr *cast;
@@ -1324,7 +1324,7 @@ struct hlsl_ir_node *implicit_conversion(struct hlsl_ir_node *node, struct hlsl_
 
     if (!(cast = new_cast(node, dst_type, loc)))
         return NULL;
-    list_add_after(&node->entry, &cast->node.entry);
+    list_add_tail(instrs, &cast->node.entry);
     return &cast->node;
 }
 
@@ -1443,8 +1443,8 @@ static BOOL invert_swizzle(unsigned int *swizzle, unsigned int *writemask, unsig
     return TRUE;
 }
 
-struct hlsl_ir_node *make_assignment(struct hlsl_ir_node *lhs, enum parse_assign_op assign_op,
-        struct hlsl_ir_node *rhs)
+struct hlsl_ir_node *add_assignment(struct list *instrs, struct hlsl_ir_node *lhs,
+        enum parse_assign_op assign_op, struct hlsl_ir_node *rhs)
 {
     struct hlsl_ir_assignment *assign = d3dcompiler_alloc(sizeof(*assign));
     struct hlsl_type *lhs_type;
@@ -1455,7 +1455,7 @@ struct hlsl_ir_node *make_assignment(struct hlsl_ir_node *lhs, enum parse_assign
     {
         writemask = (1 << lhs_type->dimx) - 1;
 
-        if (!(rhs = implicit_conversion(rhs, lhs_type, &rhs->loc)))
+        if (!(rhs = add_implicit_conversion(instrs, rhs, lhs_type, &rhs->loc)))
             return NULL;
     }
 
@@ -1524,6 +1524,7 @@ struct hlsl_ir_node *make_assignment(struct hlsl_ir_node *lhs, enum parse_assign
         rhs = expr;
     }
     assign->rhs = rhs;
+    list_add_tail(instrs, &assign->node.entry);
 
     return &assign->node;
 }

@@ -28,7 +28,7 @@ struct ldt_copy;
 struct msghdr;
 
 /* increment this when you change the function table */
-#define NTDLL_UNIXLIB_VERSION 56
+#define NTDLL_UNIXLIB_VERSION 61
 
 struct unix_funcs
 {
@@ -139,6 +139,8 @@ struct unix_funcs
     NTSTATUS      (WINAPI *NtOpenThread)( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr, const CLIENT_ID *id );
     NTSTATUS      (WINAPI *NtOpenTimer)( HANDLE *handle, ACCESS_MASK access,
                                          const OBJECT_ATTRIBUTES *attr );
+    NTSTATUS      (WINAPI *NtPowerInformation)( POWER_INFORMATION_LEVEL level, void *input, ULONG in_size,
+                                                void *output, ULONG out_size );
     NTSTATUS      (WINAPI *NtProtectVirtualMemory)( HANDLE process, PVOID *addr_ptr, SIZE_T *size_ptr,
                                                     ULONG new_prot, ULONG *old_prot );
     NTSTATUS      (WINAPI *NtPulseEvent)( HANDLE handle, LONG *prev_state );
@@ -170,6 +172,11 @@ struct unix_funcs
                                             void *ptr, SIZE_T size, SIZE_T *ret_size );
     NTSTATUS      (WINAPI *NtQuerySemaphore)( HANDLE handle, SEMAPHORE_INFORMATION_CLASS class,
                                               void *info, ULONG len, ULONG *ret_len );
+    NTSTATUS      (WINAPI *NtQuerySystemInformation)( SYSTEM_INFORMATION_CLASS class,
+                                                      void *info, ULONG size, ULONG *ret_size );
+    NTSTATUS      (WINAPI *NtQuerySystemInformationEx)( SYSTEM_INFORMATION_CLASS class,
+                                                        void *query, ULONG query_len,
+                                                        void *info, ULONG size, ULONG *ret_size );
     NTSTATUS      (WINAPI *NtQuerySystemTime)( LARGE_INTEGER *time );
     NTSTATUS      (WINAPI *NtQueryTimer)( HANDLE handle, TIMER_INFORMATION_CLASS class,
                                           void *info, ULONG len, ULONG *ret_len );
@@ -277,11 +284,9 @@ struct unix_funcs
     NTSTATUS      (CDECL *fast_RtlWakeConditionVariable)( RTL_CONDITION_VARIABLE *variable, int count );
 
     /* environment functions */
-    void          (CDECL *get_main_args)( int *argc, char **argv[], char **envp[] );
     NTSTATUS      (CDECL *get_initial_environment)( WCHAR **wargv[], WCHAR *env, SIZE_T *size );
+    NTSTATUS      (CDECL *get_dynamic_environment)( WCHAR *env, SIZE_T *size );
     void          (CDECL *get_initial_directory)( UNICODE_STRING *dir );
-    void          (CDECL *get_paths)( const char **builddir, const char **datadir, const char **configdir );
-    void          (CDECL *get_dll_path)( const char ***paths, SIZE_T *maxlen );
     void          (CDECL *get_unix_codepage)( CPTABLEINFO *table );
     void          (CDECL *get_locales)( WCHAR *sys, WCHAR *user );
     const char *  (CDECL *get_version)(void);
@@ -289,20 +294,16 @@ struct unix_funcs
     void          (CDECL *get_host_version)( const char **sysname, const char **release );
 
     /* virtual memory functions */
-    NTSTATUS      (CDECL *map_so_dll)( const IMAGE_NT_HEADERS *nt_descr, HMODULE module );
     NTSTATUS      (CDECL *virtual_map_section)( HANDLE handle, PVOID *addr_ptr, unsigned short zero_bits_64, SIZE_T commit_size,
                                                 const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr, ULONG alloc_type,
                                                 ULONG protect, pe_image_info_t *image_info );
-    void          (CDECL *virtual_get_system_info)( SYSTEM_BASIC_INFORMATION *info );
-    NTSTATUS      (CDECL *virtual_create_builtin_view)( void *module );
     NTSTATUS      (CDECL *virtual_alloc_thread_stack)( INITIAL_TEB *stack, SIZE_T reserve_size, SIZE_T commit_size, SIZE_T *pthread_size );
     ssize_t       (CDECL *virtual_locked_recvmsg)( int fd, struct msghdr *hdr, int flags );
     void          (CDECL *virtual_release_address_space)(void);
     void          (CDECL *virtual_set_large_address_space)(void);
 
     /* thread/process functions */
-    TEB *         (CDECL *init_threading)( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size,
-                                           BOOL *suspend, unsigned int *cpus, BOOL *wow64, timeout_t *start_time );
+    TEB *         (CDECL *init_threading)( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size );
     void          (CDECL *exit_thread)( int status );
     void          (CDECL *exit_process)( int status );
     NTSTATUS      (CDECL *exec_process)( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTSTATUS status );
@@ -310,8 +311,6 @@ struct unix_funcs
     /* server functions */
     unsigned int  (CDECL *server_call)( void *req_ptr );
     void          (CDECL *server_send_fd)( int fd );
-    int           (CDECL *server_get_unix_fd)( HANDLE handle, unsigned int wanted_access, int *unix_fd,
-                                               int *needs_close, enum server_fd_type *type, unsigned int *options );
     NTSTATUS      (CDECL *server_fd_to_handle)( int fd, unsigned int access, unsigned int attributes,
                                                 HANDLE *handle );
     NTSTATUS      (CDECL *server_handle_to_fd)( HANDLE handle, unsigned int access, int *unix_fd,
@@ -324,6 +323,13 @@ struct unix_funcs
                                                  UINT disposition, BOOLEAN check_case );
     NTSTATUS      (CDECL *unix_to_nt_file_name)( const ANSI_STRING *name, UNICODE_STRING *nt );
     void          (CDECL *set_show_dot_files)( BOOL enable );
+
+    /* loader functions */
+    NTSTATUS      (CDECL *load_so_dll)( UNICODE_STRING *nt_name, void **module );
+    NTSTATUS      (CDECL *load_builtin_dll)( const WCHAR *name, void **module,
+                                             pe_image_info_t *image_info );
+    NTSTATUS      (CDECL *unload_builtin_dll)( void *module );
+    void          (CDECL *init_builtin_dll)( void *module );
 
     /* debugging functions */
     unsigned char (CDECL *dbg_get_channel_flags)( struct __wine_debug_channel *channel );

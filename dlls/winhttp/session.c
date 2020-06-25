@@ -246,7 +246,6 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
     session->hdr.flags = flags;
     session->hdr.refs = 1;
     session->hdr.redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
-    list_init( &session->hdr.children );
     session->resolve_timeout = DEFAULT_RESOLVE_TIMEOUT;
     session->connect_timeout = DEFAULT_CONNECT_TIMEOUT;
     session->send_timeout = DEFAULT_SEND_TIMEOUT;
@@ -283,8 +282,7 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
         if (bypass && !(session->proxy_bypass = strdupW( bypass ))) goto end;
     }
 
-    if (!(handle = alloc_handle( &session->hdr ))) goto end;
-    session->hdr.handle = handle;
+    handle = alloc_handle( &session->hdr );
 
 end:
     release_object( &session->hdr );
@@ -552,20 +550,18 @@ HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, LPCWSTR server, INTERNET_PO
     connect->hdr.notify_mask = session->hdr.notify_mask;
     connect->hdr.context = session->hdr.context;
     connect->hdr.redirect_policy = session->hdr.redirect_policy;
-    list_init( &connect->hdr.children );
 
     addref_object( &session->hdr );
     connect->session = session;
-    list_add_head( &session->hdr.children, &connect->hdr.entry );
 
     if (!(connect->hostname = strdupW( server ))) goto end;
     connect->hostport = port;
     if (!set_server_for_hostname( connect, server, port )) goto end;
 
-    if (!(hconnect = alloc_handle( &connect->hdr ))) goto end;
-    connect->hdr.handle = hconnect;
-
-    send_callback( &session->hdr, WINHTTP_CALLBACK_STATUS_HANDLE_CREATED, &hconnect, sizeof(hconnect) );
+    if ((hconnect = alloc_handle( &connect->hdr )))
+    {
+        send_callback( &session->hdr, WINHTTP_CALLBACK_STATUS_HANDLE_CREATED, &hconnect, sizeof(hconnect) );
+    }
 
 end:
     release_object( &connect->hdr );
@@ -582,11 +578,11 @@ static void request_destroy( struct object_header *hdr )
 
     TRACE("%p\n", request);
 
-    if (request->task_proc_running)
+    if (request->queue.proc_running)
     {
         /* Signal to the task proc to quit. It will call this again when it does. */
-        request->task_proc_running = FALSE;
-        SetEvent( request->task_cancel );
+        request->queue.proc_running = FALSE;
+        SetEvent( request->queue.cancel );
         return;
     }
     release_object( &request->connect->hdr );
@@ -617,6 +613,9 @@ static void request_destroy( struct object_header *hdr )
             heap_free( request->creds[i][j].password );
         }
     }
+
+    request->queue.cs.DebugInfo->Spare[0] = 0;
+    DeleteCriticalSection( &request->queue.cs );
     heap_free( request );
 }
 
@@ -1121,12 +1120,11 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, LPCWSTR verb, LPCWSTR o
     request->hdr.notify_mask = connect->hdr.notify_mask;
     request->hdr.context = connect->hdr.context;
     request->hdr.redirect_policy = connect->hdr.redirect_policy;
-    list_init( &request->hdr.children );
-    list_init( &request->task_queue );
+    InitializeCriticalSection( &request->queue.cs );
+    request->queue.cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": request.queue.cs");
 
     addref_object( &connect->hdr );
     request->connect = connect;
-    list_add_head( &connect->hdr.children, &request->hdr.entry );
 
     request->resolve_timeout = connect->session->resolve_timeout;
     request->connect_timeout = connect->session->connect_timeout;
@@ -1142,10 +1140,10 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, LPCWSTR verb, LPCWSTR o
     if (!(request->version = strdupW( version ))) goto end;
     if (!(add_accept_types_header( request, types ))) goto end;
 
-    if (!(hrequest = alloc_handle( &request->hdr ))) goto end;
-    request->hdr.handle = hrequest;
-
-    send_callback( &request->hdr, WINHTTP_CALLBACK_STATUS_HANDLE_CREATED, &hrequest, sizeof(hrequest) );
+    if ((hrequest = alloc_handle( &request->hdr )))
+    {
+        send_callback( &request->hdr, WINHTTP_CALLBACK_STATUS_HANDLE_CREATED, &hrequest, sizeof(hrequest) );
+    }
 
 end:
     release_object( &request->hdr );

@@ -51,7 +51,6 @@ struct object_header
     WINHTTP_STATUS_CALLBACK callback;
     DWORD notify_mask;
     struct list entry;
-    struct list children;
 };
 
 struct hostdata
@@ -156,6 +155,16 @@ struct authinfo
     BOOL finished; /* finished authenticating */
 };
 
+struct queue
+{
+    struct object_header *object;
+    CRITICAL_SECTION cs;
+    BOOL proc_running;
+    HANDLE wait;
+    HANDLE cancel;
+    struct list tasks;
+};
+
 enum request_flags
 {
     REQUEST_FLAG_WEBSOCKET_UPGRADE = 0x01,
@@ -197,11 +206,7 @@ struct request
     DWORD num_headers;
     struct authinfo *authinfo;
     struct authinfo *proxy_authinfo;
-    HANDLE task_wait;
-    HANDLE task_cancel;
-    BOOL   task_proc_running;
-    struct list task_queue;
-    CRITICAL_SECTION task_cs;
+    struct queue queue;
     struct
     {
         WCHAR *username;
@@ -209,16 +214,48 @@ struct request
     } creds[TARGET_MAX][SCHEME_MAX];
 };
 
+enum socket_state
+{
+    SOCKET_STATE_OPEN     = 0,
+    SOCKET_STATE_SHUTDOWN = 1,
+    SOCKET_STATE_CLOSED   = 2,
+};
+
+/* rfc6455 */
+enum socket_opcode
+{
+    SOCKET_OPCODE_CONTINUE  = 0x00,
+    SOCKET_OPCODE_TEXT      = 0x01,
+    SOCKET_OPCODE_BINARY    = 0x02,
+    SOCKET_OPCODE_RESERVED3 = 0x03,
+    SOCKET_OPCODE_RESERVED4 = 0x04,
+    SOCKET_OPCODE_RESERVED5 = 0x05,
+    SOCKET_OPCODE_RESERVED6 = 0x06,
+    SOCKET_OPCODE_RESERVED7 = 0x07,
+    SOCKET_OPCODE_CLOSE     = 0x08,
+    SOCKET_OPCODE_PING      = 0x09,
+    SOCKET_OPCODE_PONG      = 0x0a,
+    SOCKET_OPCODE_INVALID   = 0xff,
+};
+
 struct socket
 {
     struct object_header hdr;
     struct request *request;
+    enum socket_state state;
+    struct queue send_q;
+    struct queue recv_q;
+    enum socket_opcode opcode;
+    DWORD read_size;
+    USHORT status;
+    char reason[128];
+    DWORD reason_len;
 };
 
 struct task_header
 {
     struct list entry;
-    struct request *request;
+    struct object_header *object;
     void (*proc)( struct task_header * );
 };
 
@@ -258,6 +295,29 @@ struct write_data
     const void *buffer;
     DWORD to_write;
     DWORD *written;
+};
+
+struct socket_send
+{
+    struct task_header hdr;
+    WINHTTP_WEB_SOCKET_BUFFER_TYPE type;
+    const void *buf;
+    DWORD len;
+};
+
+struct socket_receive
+{
+    struct task_header hdr;
+    void *buf;
+    DWORD len;
+};
+
+struct socket_shutdown
+{
+    struct task_header hdr;
+    USHORT status;
+    const void *reason;
+    DWORD len;
 };
 
 struct object_header *addref_object( struct object_header * ) DECLSPEC_HIDDEN;
