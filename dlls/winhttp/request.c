@@ -3310,7 +3310,7 @@ static DWORD receive_bytes( struct netconn *netconn, char *buf, DWORD len, DWORD
 {
     DWORD err;
     if ((err = netconn_recv( netconn, buf, len, 0, (int *)ret_len ))) return err;
-    if (len && !*ret_len) return ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
+    if (*ret_len != len) return ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
     return ERROR_SUCCESS;
 }
 
@@ -3341,8 +3341,7 @@ static DWORD receive_frame( struct netconn *netconn, DWORD *ret_len, enum socket
     char hdr[2];
 
     if ((ret = receive_bytes( netconn, hdr, sizeof(hdr), &count ))) return ret;
-    if (count != sizeof(hdr) || (hdr[0] & RESERVED_BIT) || (hdr[1] & MASK_BIT) ||
-        (map_opcode( hdr[0] & 0xf, FALSE ) == ~0u))
+    if ((hdr[0] & RESERVED_BIT) || (hdr[1] & MASK_BIT) || (map_opcode( hdr[0] & 0xf, FALSE ) == ~0u))
     {
         return ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
     }
@@ -3353,14 +3352,12 @@ static DWORD receive_frame( struct netconn *netconn, DWORD *ret_len, enum socket
     {
         USHORT len16;
         if ((ret = receive_bytes( netconn, (char *)&len16, sizeof(len16), &count ))) return ret;
-        if (count != sizeof(len16)) return ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
         len = RtlUshortByteSwap( len16 );
     }
     else if (len == 127)
     {
         ULONGLONG len64;
         if ((ret = receive_bytes( netconn, (char *)&len64, sizeof(len64), &count ))) return ret;
-        if (count != sizeof(len64)) return ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
         if ((len64 = RtlUlonglongByteSwap( len64 )) > ~0u) return ERROR_NOT_SUPPORTED;
         len = len64;
     }
@@ -3372,10 +3369,11 @@ static DWORD receive_frame( struct netconn *netconn, DWORD *ret_len, enum socket
 static DWORD socket_receive( struct socket *socket, void *buf, DWORD len, DWORD *ret_len,
                              WINHTTP_WEB_SOCKET_BUFFER_TYPE *ret_type, BOOL async )
 {
+    struct netconn *netconn = socket->request->netconn;
     DWORD count, ret = ERROR_SUCCESS;
 
-    if (!socket->read_size) ret = receive_frame( socket->request->netconn, &socket->read_size, &socket->opcode );
-    if (!ret) ret = receive_bytes( socket->request->netconn, buf, min(len, socket->read_size), &count );
+    if (!socket->read_size) ret = receive_frame( netconn, &socket->read_size, &socket->opcode );
+    if (!ret) ret = receive_bytes( netconn, buf, min(len, socket->read_size), &count );
     if (!ret)
     {
         socket->read_size -= count;
@@ -3385,7 +3383,6 @@ static DWORD socket_receive( struct socket *socket, void *buf, DWORD len, DWORD 
             *ret_type = map_opcode( socket->opcode, socket->read_size != 0 );
         }
     }
-
     if (async)
     {
         if (!ret)
@@ -3458,9 +3455,13 @@ DWORD WINAPI WinHttpWebSocketReceive( HINTERNET hsocket, void *buf, DWORD len, D
 
 static DWORD socket_shutdown( struct socket *socket, USHORT status, const void *reason, DWORD len, BOOL async )
 {
+    struct netconn *netconn = socket->request->netconn;
     DWORD ret;
 
-    ret = send_frame( socket->request->netconn, WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE, status, reason, len, TRUE );
+    if (!(ret = send_frame( netconn, WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE, status, reason, len, TRUE )))
+    {
+        socket->state = SOCKET_STATE_SHUTDOWN;
+    }
     if (async)
     {
         if (!ret) send_callback( &socket->hdr, WINHTTP_CALLBACK_STATUS_SHUTDOWN_COMPLETE, NULL, 0 );
@@ -3473,8 +3474,6 @@ static DWORD socket_shutdown( struct socket *socket, USHORT status, const void *
             send_callback( &socket->hdr, WINHTTP_CALLBACK_STATUS_REQUEST_ERROR, &result, sizeof(result) );
         }
     }
-
-    if (!ret) socket->state = SOCKET_STATE_SHUTDOWN;
     return ret;
 }
 
@@ -3546,20 +3545,21 @@ static DWORD socket_close( struct socket *socket, USHORT status, const void *rea
     }
 
     if ((ret = receive_frame( netconn, &count, &socket->opcode ))) goto done;
-    if (socket->opcode != SOCKET_OPCODE_CLOSE || (count && count > sizeof(socket->reason)))
+    if (socket->opcode != SOCKET_OPCODE_CLOSE ||
+        (count && (count < sizeof(socket->status) || count > sizeof(socket->status) + sizeof(socket->reason))))
     {
         ret = ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
         goto done;
     }
 
-    if ((ret = receive_bytes( netconn, (char *)&socket->status, sizeof(socket->status), &count ))) goto done;
-    if (count != sizeof(socket->status))
+    if (count)
     {
-        ret = ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
-        goto done;
+        DWORD reason_len = count - sizeof(socket->status);
+        if ((ret = receive_bytes( netconn, (char *)&socket->status, sizeof(socket->status), &count ))) goto done;
+        socket->status = RtlUshortByteSwap( socket->status );
+        if ((ret = receive_bytes( netconn, socket->reason, reason_len, &socket->reason_len ))) goto done;
     }
-    socket->status = RtlUshortByteSwap( socket->status );
-    ret = receive_bytes( netconn, socket->reason, sizeof(socket->reason), &socket->reason_len );
+    socket->state = SOCKET_STATE_CLOSED;
 
 done:
     if (async)
@@ -3574,8 +3574,6 @@ done:
             send_callback( &socket->hdr, WINHTTP_CALLBACK_STATUS_REQUEST_ERROR, &result, sizeof(result) );
         }
     }
-
-    if (!ret) socket->state = SOCKET_STATE_CLOSED;
     return ret;
 }
 

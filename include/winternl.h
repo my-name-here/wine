@@ -986,6 +986,7 @@ typedef enum _SYSTEM_INFORMATION_CLASS {
     SystemSuperfetchInformation = 79,
     SystemMemoryListInformation = 80,
     SystemFileCacheInformationEx = 81,
+    SystemDynamicTimeZoneInformation = 102,
     SystemLogicalProcessorInformationEx = 107,
     SystemInformationClassMax
 } SYSTEM_INFORMATION_CLASS, *PSYSTEM_INFORMATION_CLASS;
@@ -1482,10 +1483,10 @@ typedef struct _SYSTEM_PERFORMANCE_INFORMATION {
 
 typedef struct _SYSTEM_TIMEOFDAY_INFORMATION {
 #ifdef __WINESRC__
-    LARGE_INTEGER liKeBootTime;
-    LARGE_INTEGER liKeSystemTime;
-    LARGE_INTEGER liExpTimeZoneBias;
-    ULONG uCurrentTimeZoneId;
+    LARGE_INTEGER BootTime;
+    LARGE_INTEGER SystemTime;
+    LARGE_INTEGER TimeZoneBias;
+    ULONG TimeZoneId;
     ULONG Reserved;
     ULONGLONG BootTimeBias;
     ULONGLONG SleepTimeBias;

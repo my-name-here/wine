@@ -26,9 +26,10 @@
 
 struct ldt_copy;
 struct msghdr;
+struct _DISPATCHER_CONTEXT;
 
 /* increment this when you change the function table */
-#define NTDLL_UNIXLIB_VERSION 61
+#define NTDLL_UNIXLIB_VERSION 64
 
 struct unix_funcs
 {
@@ -260,6 +261,7 @@ struct unix_funcs
 
     /* other Win32 API functions */
     NTSTATUS      (WINAPI *DbgUiIssueRemoteBreakin)( HANDLE process );
+    LONGLONG      (WINAPI *RtlGetSystemTimePrecise)(void);
     NTSTATUS      (WINAPI *RtlWaitOnAddress)( const void *addr, const void *cmp, SIZE_T size,
                                               const LARGE_INTEGER *timeout );
     void          (WINAPI *RtlWakeAddressAll)( const void *addr );
@@ -282,6 +284,18 @@ struct unix_funcs
                                                              RTL_CRITICAL_SECTION *cs,
                                                              const LARGE_INTEGER *timeout );
     NTSTATUS      (CDECL *fast_RtlWakeConditionVariable)( RTL_CONDITION_VARIABLE *variable, int count );
+
+    /* math functions */
+    double        (CDECL *atan)( double d );
+    double        (CDECL *ceil)( double d );
+    double        (CDECL *cos)( double d );
+    double        (CDECL *fabs)( double d );
+    double        (CDECL *floor)( double d );
+    double        (CDECL *log)( double d );
+    double        (CDECL *pow)( double x, double y );
+    double        (CDECL *sin)( double d );
+    double        (CDECL *sqrt)( double d );
+    double        (CDECL *tan)( double d );
 
     /* environment functions */
     NTSTATUS      (CDECL *get_initial_environment)( WCHAR **wargv[], WCHAR *env, SIZE_T *size );
@@ -330,6 +344,8 @@ struct unix_funcs
                                              pe_image_info_t *image_info );
     NTSTATUS      (CDECL *unload_builtin_dll)( void *module );
     void          (CDECL *init_builtin_dll)( void *module );
+    NTSTATUS      (CDECL *unwind_builtin_dll)( ULONG type, struct _DISPATCHER_CONTEXT *dispatch,
+                                               CONTEXT *context );
 
     /* debugging functions */
     unsigned char (CDECL *dbg_get_channel_flags)( struct __wine_debug_channel *channel );

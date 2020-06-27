@@ -417,17 +417,35 @@ static HRESULT allocate_surfaces(struct quartz_vmr *filter, const AM_MEDIA_TYPE 
 
     if (!is_vmr9(filter))
     {
-        switch (filter->bmiheader.biBitCount)
+        switch (filter->bmiheader.biCompression)
         {
-            case 24: info.Format = D3DFMT_R8G8B8; break;
-            case 32: info.Format = D3DFMT_X8R8G8B8; break;
-            default:
-                FIXME("Unhandled bit depth %u.\n", filter->bmiheader.biBitCount);
-                free(filter->surfaces);
-                return E_INVALIDARG;
-        }
+        case BI_RGB:
+            switch (filter->bmiheader.biBitCount)
+            {
+                case 24: info.Format = D3DFMT_R8G8B8; break;
+                case 32: info.Format = D3DFMT_X8R8G8B8; break;
+                default:
+                    FIXME("Unhandled bit depth %u.\n", filter->bmiheader.biBitCount);
+                    free(filter->surfaces);
+                    return VFW_E_TYPE_NOT_ACCEPTED;
+            }
 
-        info.dwFlags = VMR9AllocFlag_TextureSurface;
+            info.dwFlags = VMR9AllocFlag_TextureSurface;
+            break;
+
+        case mmioFOURCC('N','V','1','2'):
+        case mmioFOURCC('U','Y','V','Y'):
+        case mmioFOURCC('Y','U','Y','2'):
+        case mmioFOURCC('Y','V','1','2'):
+            info.Format = filter->bmiheader.biCompression;
+            info.dwFlags = VMR9AllocFlag_OffscreenSurface;
+            break;
+
+        default:
+            WARN("Unhandled video compression %#x.\n", filter->bmiheader.biCompression);
+            free(filter->surfaces);
+            return VFW_E_TYPE_NOT_ACCEPTED;
+        }
         if (FAILED(hr = initialize_device(filter, &info, count)))
             free(filter->surfaces);
         return hr;
@@ -456,7 +474,7 @@ static HRESULT allocate_surfaces(struct quartz_vmr *filter, const AM_MEDIA_TYPE 
     }
 
     free(filter->surfaces);
-    return hr;
+    return VFW_E_TYPE_NOT_ACCEPTED;
 }
 
 static void vmr_start_stream(struct strmbase_renderer *iface)
@@ -501,12 +519,13 @@ static HRESULT vmr_connect(struct strmbase_renderer *iface, const AM_MEDIA_TYPE 
     filter->VideoWidth = bitmap_header->biWidth;
     filter->VideoHeight = bitmap_header->biHeight;
     SetRect(&rect, 0, 0, filter->VideoWidth, filter->VideoHeight);
-    filter->window.src = filter->window.dst = rect;
+    filter->window.src = rect;
 
     AdjustWindowRectEx(&rect, GetWindowLongW(window, GWL_STYLE), FALSE,
             GetWindowLongW(window, GWL_EXSTYLE));
     SetWindowPos(window, NULL, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    GetClientRect(window, &filter->window.dst);
 
     if (filter->mode
             || SUCCEEDED(hr = IVMRFilterConfig9_SetRenderingMode(&filter->IVMRFilterConfig9_iface, VMR9Mode_Windowed)))

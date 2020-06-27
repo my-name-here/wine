@@ -8205,12 +8205,13 @@ static void _set_iframe_width(unsigned line, IHTMLElement *elem, const WCHAR *va
 static void test_iframe_elem(IHTMLElement *elem)
 {
     IHTMLDocument2 *content_doc, *owner_doc;
+    IHTMLIFrameElement2 *iframe2;
     IHTMLIFrameElement3 *iframe3;
     IHTMLElementCollection *col;
     IHTMLWindow2 *content_window;
     IHTMLElement *body;
     IDispatch *disp;
-    VARIANT errv;
+    VARIANT errv, v;
     BSTR str;
     HRESULT hres;
 
@@ -8244,16 +8245,30 @@ static void test_iframe_elem(IHTMLElement *elem)
         win_skip("IHTMLIFrameElement3 not supported\n");
     }
 
+    iframe2 = get_iframe2_iface((IUnknown*)elem);
+
     test_iframe_height(elem, NULL);
     set_iframe_height(elem, L"100px");
     set_iframe_height(elem, L"50%");
     test_iframe_height(elem, L"50%");
+
+    V_VT(&v) = VT_I4;
+    V_I4(&v) = 100;
+    hres = IHTMLIFrameElement2_put_height(iframe2, v);
+    ok(hres == S_OK, "put_height failed: %08x\n", hres);
+    test_iframe_height(elem, L"100");
 
     test_iframe_width(elem, NULL);
     set_iframe_width(elem, L"150px");
     set_iframe_width(elem, L"70%");
     test_iframe_width(elem, L"70%");
     test_framebase_src(elem, L"about:blank");
+
+    V_VT(&v) = VT_I4;
+    V_I4(&v) = 110;
+    hres = IHTMLIFrameElement2_put_width(iframe2, v);
+    ok(hres == S_OK, "put_height failed: %08x\n", hres);
+    test_iframe_width(elem, L"110");
 
     str = SysAllocString(L"text/html");
     V_VT(&errv) = VT_ERROR;
@@ -8279,6 +8294,7 @@ static void test_iframe_elem(IHTMLElement *elem)
     test_elem_attr(body, L"i4val", L"4");
     test_elem_attr(body, L"r8val", L"3.14");
     IHTMLElement_Release(body);
+    IHTMLIFrameElement2_Release(iframe2);
 
     hres = IHTMLDocument2_close(content_doc);
     ok(hres == S_OK, "close failed: %08x\n", hres);

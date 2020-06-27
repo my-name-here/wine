@@ -27,7 +27,7 @@
 #include "mferror.h"
 #include "mfapi.h"
 #include "initguid.h"
-#include "dxva2api.h"
+#include "evr9.h"
 
 static const WCHAR sink_id[] = {'E','V','R',' ','I','n','p','u','t','0',0};
 
@@ -383,6 +383,7 @@ static void test_default_mixer(void)
     DWORD input_id, output_id;
     IMFAttributes *attributes, *attributes2;
     IMFTransform *transform;
+    IMFGetService *gs;
     unsigned int i;
     DWORD ids[16];
     IUnknown *unk;
@@ -395,6 +396,39 @@ static void test_default_mixer(void)
     hr = IMFTransform_QueryInterface(transform, &IID_IMFTopologyServiceLookupClient, (void **)&unk);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
     IUnknown_Release(unk);
+
+    hr = IMFTransform_QueryInterface(transform, &IID_IMFGetService, (void **)&gs);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFGetService_GetService(gs, &MR_VIDEO_MIXER_SERVICE, &IID_IMFVideoMixerBitmap, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    hr = IMFGetService_GetService(gs, &MR_VIDEO_MIXER_SERVICE, &IID_IMFVideoProcessor, (void **)&unk);
+todo_wine
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    if (SUCCEEDED(hr))
+        IUnknown_Release(unk);
+
+    hr = IMFGetService_GetService(gs, &MR_VIDEO_MIXER_SERVICE, &IID_IMFVideoPositionMapper, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    IMFGetService_Release(gs);
+
+    hr = IMFTransform_QueryInterface(transform, &IID_IMFVideoMixerBitmap, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    hr = IMFTransform_QueryInterface(transform, &IID_IMFVideoPositionMapper, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    hr = IMFTransform_QueryInterface(transform, &IID_IMFVideoProcessor, (void **)&unk);
+todo_wine
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    if (SUCCEEDED(hr))
+        IUnknown_Release(unk);
 
     hr = IMFTransform_QueryInterface(transform, &IID_IMFVideoMixerControl, (void **)&unk);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);

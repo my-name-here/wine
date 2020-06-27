@@ -89,6 +89,7 @@ extern NTSTATUS CDECL fast_RtlSleepConditionVariableCS( RTL_CONDITION_VARIABLE *
                                                         RTL_CRITICAL_SECTION *cs,
                                                         const LARGE_INTEGER *timeout ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable, int count ) DECLSPEC_HIDDEN;
+extern LONGLONG CDECL fast_RtlGetSystemTimePrecise(void) DECLSPEC_HIDDEN;
 
 void CDECL mmap_add_reserved_area( void *addr, SIZE_T size ) DECLSPEC_HIDDEN;
 void CDECL mmap_remove_reserved_area( void *addr, SIZE_T size ) DECLSPEC_HIDDEN;
@@ -119,6 +120,8 @@ extern TEB * CDECL init_threading( int *nb_threads_ptr, struct ldt_copy **ldt_co
 extern void CDECL DECLSPEC_NORETURN exit_thread( int status ) DECLSPEC_HIDDEN;
 extern void CDECL DECLSPEC_NORETURN exit_process( int status ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTSTATUS status ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL unwind_builtin_dll( ULONG type, struct _DISPATCHER_CONTEXT *dispatch,
+                                          CONTEXT *context ) DECLSPEC_HIDDEN;
 
 extern NTSTATUS CDECL nt_to_unix_file_name( const UNICODE_STRING *nameW, ANSI_STRING *unix_name_ret,
                                             UINT disposition, BOOLEAN check_case ) DECLSPEC_HIDDEN;
@@ -240,6 +243,12 @@ static inline const char *debugstr_us( const UNICODE_STRING *us )
 {
     if (!us) return "<null>";
     return debugstr_wn( us->Buffer, us->Length / sizeof(WCHAR) );
+}
+
+/* convert from straight ASCII to Unicode without depending on the current codepage */
+static inline void ascii_to_unicode( WCHAR *dst, const char *src, size_t len )
+{
+    while (len--) *dst++ = (unsigned char)*src++;
 }
 
 static inline size_t ntdll_wcslen( const WCHAR *str )
