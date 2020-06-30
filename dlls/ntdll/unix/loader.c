@@ -105,10 +105,6 @@ static void (CDECL *p__wine_set_unix_funcs)( int version, const struct unix_func
 static void fatal_error( const char *err, ... ) __attribute__((noreturn, format(printf,1,2)));
 #endif
 
-extern int __wine_main_argc;
-extern char **__wine_main_argv;
-extern char **__wine_main_environ;
-
 #if defined(linux) || defined(__APPLE__)
 static const BOOL use_preloader = TRUE;
 #else
@@ -838,6 +834,13 @@ static void fixup_ntdll_imports( const IMAGE_NT_HEADERS *nt )
     GET_FUNC( LdrInitializeThunk );
     GET_FUNC( RtlUserThreadStart );
     GET_FUNC( __wine_set_unix_funcs );
+#ifdef __i386__
+    {
+        struct ldt_copy **p__wine_ldt_copy;
+        GET_FUNC( __wine_ldt_copy );
+        *p__wine_ldt_copy = &__wine_ldt_copy;
+    }
+#endif
 #undef GET_FUNC
 }
 
@@ -1490,7 +1493,9 @@ static struct unix_funcs unix_funcs =
     ntdll_sqrt,
     ntdll_tan,
     get_initial_environment,
+    get_startup_info,
     get_dynamic_environment,
+    get_initial_console,
     get_initial_directory,
     get_unix_codepage,
     get_locales,
@@ -1502,7 +1507,6 @@ static struct unix_funcs unix_funcs =
     virtual_locked_recvmsg,
     virtual_release_address_space,
     virtual_set_large_address_space,
-    init_threading,
     exit_thread,
     exit_process,
     exec_process,
@@ -1527,6 +1531,29 @@ static struct unix_funcs unix_funcs =
 };
 
 
+/***********************************************************************
+ *           start_main_thread
+ */
+static void start_main_thread(void)
+{
+    BOOL suspend;
+    TEB *teb = virtual_alloc_first_teb();
+
+    signal_init_threading();
+    signal_alloc_thread( teb );
+    signal_init_thread( teb );
+    dbg_init();
+    server_init_process();
+    startup_info_size = server_init_thread( teb->Peb, &suspend );
+    virtual_map_user_shared_data();
+    virtual_create_builtin_view( ntdll_module );
+    init_cpu_info();
+    init_files();
+    NtCreateKeyedEvent( &keyed_event, GENERIC_READ | GENERIC_WRITE, NULL, 0 );
+    p__wine_set_unix_funcs( NTDLL_UNIXLIB_VERSION, &unix_funcs );
+}
+
+
 #ifdef __APPLE__
 struct apple_stack_info
 {
@@ -1536,7 +1563,7 @@ struct apple_stack_info
 
 static void *apple_wine_thread( void *arg )
 {
-    p__wine_set_unix_funcs( NTDLL_UNIXLIB_VERSION, &unix_funcs );
+    start_main_thread();
     return NULL;
 }
 
@@ -1790,42 +1817,9 @@ void __wine_main( int argc, char *argv[], char *envp[] )
 #ifdef __APPLE__
     apple_main_thread();
 #endif
-    p__wine_set_unix_funcs( NTDLL_UNIXLIB_VERSION, &unix_funcs );
+    start_main_thread();
 }
 
-
-static int add_area( void *base, size_t size, void *arg )
-{
-    mmap_add_reserved_area( base, size );
-    return 0;
-}
-
-/***********************************************************************
- *           __wine_init_unix_lib
- *
- * Lib entry point called by ntdll.dll.so if not yet initialized.
- */
-NTSTATUS __cdecl __wine_init_unix_lib( HMODULE module, const void *ptr_in, void *ptr_out )
-{
-    const IMAGE_NT_HEADERS *nt = ptr_in;
-
-#ifdef __APPLE__
-    extern char **__wine_get_main_environment(void);
-    char **envp = __wine_get_main_environment();
-#else
-    char **envp = __wine_main_environ;
-#endif
-    init_paths( __wine_main_argc, __wine_main_argv, envp );
-
-    ntdll_module = module;
-    map_so_dll( nt, module );
-    fixup_ntdll_imports( &__wine_spec_nt_header );
-    init_environment( __wine_main_argc, __wine_main_argv, envp );
-    wine_dll_set_callback( load_builtin_callback );
-    *(struct unix_funcs **)ptr_out = &unix_funcs;
-    wine_mmap_enum_reserved_areas( add_area, NULL, 0 );
-    return STATUS_SUCCESS;
-}
 
 BOOL WINAPI DECLSPEC_HIDDEN DllMain( HINSTANCE inst, DWORD reason, LPVOID reserved )
 {

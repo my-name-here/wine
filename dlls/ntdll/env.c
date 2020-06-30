@@ -1247,16 +1247,16 @@ wait:
  *
  * Fill the initial RTL_USER_PROCESS_PARAMETERS structure from the server.
  */
-void init_user_process_params( SIZE_T data_size )
+void init_user_process_params(void)
 {
     WCHAR *src, *load_path, *dummy;
-    SIZE_T info_size, env_size;
-    NTSTATUS status;
+    SIZE_T info_size, env_size, data_size = 0;
     startup_info_t *info = NULL;
     RTL_USER_PROCESS_PARAMETERS *params = NULL;
     UNICODE_STRING curdir, dllpath, imagepath, cmdline, title, desktop, shellinfo, runtime;
     WCHAR **wargv;
 
+    unix_funcs->get_startup_info( NULL, &data_size, &info_size );
     if (!data_size)
     {
         RTL_USER_PROCESS_PARAMETERS initial_params = {0};
@@ -1286,14 +1286,8 @@ void init_user_process_params( SIZE_T data_size )
         RtlFreeUnicodeString( &cmdline );
         RtlReleasePath( load_path );
 
-        if (isatty(0) || isatty(1) || isatty(2))
-            params->ConsoleHandle = (HANDLE)2; /* see kernel32/kernel_private.h */
-        if (!isatty(0))
-            wine_server_fd_to_handle( 0, GENERIC_READ|SYNCHRONIZE,  OBJ_INHERIT, &params->hStdInput );
-        if (!isatty(1))
-            wine_server_fd_to_handle( 1, GENERIC_WRITE|SYNCHRONIZE, OBJ_INHERIT, &params->hStdOutput );
-        if (!isatty(2))
-            wine_server_fd_to_handle( 2, GENERIC_WRITE|SYNCHRONIZE, OBJ_INHERIT, &params->hStdError );
+        unix_funcs->get_initial_console( &params->ConsoleHandle, &params->hStdInput,
+                                         &params->hStdOutput, &params->hStdError );
         params->wShowWindow = 1; /* SW_SHOWNORMAL */
 
         run_wineboot( &params->Environment );
@@ -1302,18 +1296,7 @@ void init_user_process_params( SIZE_T data_size )
 
     if (!(info = RtlAllocateHeap( GetProcessHeap(), 0, data_size ))) return;
 
-    SERVER_START_REQ( get_startup_info )
-    {
-        wine_server_set_reply( req, info, data_size );
-        if (!(status = wine_server_call( req )))
-        {
-            data_size = wine_server_reply_size( reply );
-            info_size = reply->info_size;
-            env_size  = data_size - info_size;
-        }
-    }
-    SERVER_END_REQ;
-    if (status) goto done;
+    if (unix_funcs->get_startup_info( info, &data_size, &info_size )) goto done;
 
     src = (WCHAR *)(info + 1);
     get_unicode_string( &curdir, &src, info->curdir_len );
@@ -1350,6 +1333,7 @@ void init_user_process_params( SIZE_T data_size )
     params->wShowWindow     = info->show;
 
     /* environment needs to be a separate memory block */
+    env_size = data_size - info_size;
     if ((params->Environment = RtlAllocateHeap( GetProcessHeap(), 0, max( env_size, sizeof(WCHAR) ))))
     {
         if (env_size) memcpy( params->Environment, (char *)info + info_size, env_size );

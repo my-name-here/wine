@@ -557,7 +557,7 @@ static struct hlsl_ir_assignment *new_assignment(struct hlsl_ir_var *var, struct
     return assign;
 }
 
-static struct hlsl_ir_assignment *make_simple_assignment(struct hlsl_ir_var *lhs, struct hlsl_ir_node *rhs)
+static struct hlsl_ir_assignment *new_simple_assignment(struct hlsl_ir_var *lhs, struct hlsl_ir_node *rhs)
 {
     return new_assignment(lhs, NULL, rhs, 0, rhs->loc);
 }
@@ -575,7 +575,7 @@ static struct hlsl_ir_jump *add_return(struct list *instrs,
         if (!(return_value = add_implicit_conversion(instrs, return_value, return_type, &loc)))
             return NULL;
 
-        if (!(assignment = make_simple_assignment(hlsl_ctx.cur_function->return_var, return_value)))
+        if (!(assignment = new_simple_assignment(hlsl_ctx.cur_function->return_var, return_value)))
             return NULL;
         list_add_after(&return_value->entry, &assignment->node.entry);
     }
@@ -608,6 +608,34 @@ static struct hlsl_ir_constant *new_uint_constant(unsigned int n, const struct s
     return c;
 }
 
+struct hlsl_ir_node *new_unary_expr(enum hlsl_ir_expr_op op, struct hlsl_ir_node *arg, struct source_location loc)
+{
+    struct hlsl_ir_expr *expr;
+
+    if (!(expr = d3dcompiler_alloc(sizeof(*expr))))
+        return NULL;
+    init_node(&expr->node, HLSL_IR_EXPR, arg->data_type, loc);
+    expr->op = op;
+    expr->operands[0] = arg;
+    return &expr->node;
+}
+
+struct hlsl_ir_node *new_binary_expr(enum hlsl_ir_expr_op op,
+        struct hlsl_ir_node *arg1, struct hlsl_ir_node *arg2)
+{
+    struct hlsl_ir_expr *expr;
+
+    assert(compare_hlsl_types(arg1->data_type, arg2->data_type));
+
+    if (!(expr = d3dcompiler_alloc(sizeof(*expr))))
+        return NULL;
+    init_node(&expr->node, HLSL_IR_EXPR, arg1->data_type, arg1->loc);
+    expr->op = op;
+    expr->operands[0] = arg1;
+    expr->operands[1] = arg2;
+    return &expr->node;
+}
+
 static struct hlsl_ir_load *new_var_load(struct hlsl_ir_var *var, const struct source_location loc)
 {
     struct hlsl_ir_load *load = d3dcompiler_alloc(sizeof(*load));
@@ -636,7 +664,7 @@ static struct hlsl_ir_load *add_load(struct list *instrs, struct hlsl_ir_node *v
         var = src->var;
         if (src->offset)
         {
-            if (!(add = new_binary_expr(HLSL_IR_BINOP_ADD, src->offset, offset, loc)))
+            if (!(add = new_binary_expr(HLSL_IR_BINOP_ADD, src->offset, offset)))
                 return NULL;
             list_add_tail(instrs, &add->entry);
             offset = add;
@@ -653,7 +681,7 @@ static struct hlsl_ir_load *add_load(struct list *instrs, struct hlsl_ir_node *v
 
         TRACE("Synthesized variable %p for %s node.\n", var, debug_node_type(var_node->type));
 
-        if (!(assign = make_simple_assignment(var, var_node)))
+        if (!(assign = new_simple_assignment(var, var_node)))
             return NULL;
 
         list_add_tail(instrs, &assign->node.entry);
@@ -712,7 +740,7 @@ static struct hlsl_ir_load *add_array_load(struct list *instrs, struct hlsl_ir_n
     if (!(c = new_uint_constant(data_type->reg_size * 4, loc)))
         return NULL;
     list_add_tail(instrs, &c->node.entry);
-    if (!(mul = new_binary_expr(HLSL_IR_BINOP_MUL, index, &c->node, loc)))
+    if (!(mul = new_binary_expr(HLSL_IR_BINOP_MUL, index, &c->node)))
         return NULL;
     list_add_tail(instrs, &mul->entry);
     index = mul;
@@ -1193,12 +1221,14 @@ static struct list *append_unop(struct list *list, struct hlsl_ir_node *node)
     return list;
 }
 
-static struct list *append_binop(struct list *first, struct list *second, struct hlsl_ir_node *node)
+static struct list *add_binary_expr(struct list *list1, struct list *list2,
+        enum hlsl_ir_expr_op op, struct source_location loc)
 {
-    list_move_tail(first, second);
-    d3dcompiler_free(second);
-    list_add_tail(first, &node->entry);
-    return first;
+    struct hlsl_ir_node *args[3] = {node_from_list(list1), node_from_list(list2)};
+    list_move_tail(list1, list2);
+    d3dcompiler_free(list2);
+    add_expr(list1, op, args, &loc);
+    return list1;
 }
 
 static struct list *make_list(struct hlsl_ir_node *node)
@@ -2578,40 +2608,33 @@ unary_op:                 '+'
                                 $$ = UNARY_OP_BITNOT;
                             }
 
-mul_expr:                 unary_expr
-                            {
-                                $$ = $1;
-                            }
-                        | mul_expr '*' unary_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_MUL,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | mul_expr '/' unary_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_DIV,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | mul_expr '%' unary_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_MOD,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
+mul_expr:
 
-add_expr:                 mul_expr
-                            {
-                                $$ = $1;
-                            }
-                        | add_expr '+' mul_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_ADD,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | add_expr '-' mul_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_SUB,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
+      unary_expr
+    | mul_expr '*' unary_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_MUL, get_location(&@2));
+        }
+    | mul_expr '/' unary_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_DIV, get_location(&@2));
+        }
+    | mul_expr '%' unary_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_MOD, get_location(&@2));
+        }
+
+add_expr:
+
+      mul_expr
+    | add_expr '+' mul_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_ADD, get_location(&@2));
+        }
+    | add_expr '-' mul_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_SUB, get_location(&@2));
+        }
 
 shift_expr:               add_expr
                             {
@@ -2626,45 +2649,37 @@ shift_expr:               add_expr
                                 FIXME("Right shift\n");
                             }
 
-relational_expr:          shift_expr
-                            {
-                                $$ = $1;
-                            }
-                        | relational_expr '<' shift_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_LESS,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | relational_expr '>' shift_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_GREATER,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | relational_expr OP_LE shift_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_LEQUAL,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | relational_expr OP_GE shift_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_GEQUAL,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
+relational_expr:
 
-equality_expr:            relational_expr
-                            {
-                                $$ = $1;
-                            }
-                        | equality_expr OP_EQ relational_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_EQUAL,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
-                        | equality_expr OP_NE relational_expr
-                            {
-                                $$ = append_binop($1, $3, new_binary_expr(HLSL_IR_BINOP_NEQUAL,
-                                        node_from_list($1), node_from_list($3), get_location(&@2)));
-                            }
+      shift_expr
+    | relational_expr '<' shift_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_LESS, get_location(&@2));
+        }
+    | relational_expr '>' shift_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_GREATER, get_location(&@2));
+        }
+    | relational_expr OP_LE shift_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_LEQUAL, get_location(&@2));
+        }
+    | relational_expr OP_GE shift_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_GEQUAL, get_location(&@2));
+        }
+
+equality_expr:
+
+      relational_expr
+    | equality_expr OP_EQ relational_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_EQUAL, get_location(&@2));
+        }
+    | equality_expr OP_NE relational_expr
+        {
+            $$ = add_binary_expr($1, $3, HLSL_IR_BINOP_NEQUAL, get_location(&@2));
+        }
 
 bitand_expr:              equality_expr
                             {

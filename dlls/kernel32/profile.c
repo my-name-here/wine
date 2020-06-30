@@ -489,29 +489,6 @@ static PROFILESECTION *PROFILE_Load(HANDLE hFile, ENCODING * pEncoding)
 
 
 /***********************************************************************
- *           PROFILE_DeleteSection
- *
- * Delete a section from a profile tree.
- */
-static BOOL PROFILE_DeleteSection( PROFILESECTION **section, LPCWSTR name )
-{
-    while (*section)
-    {
-        if (!strcmpiW( (*section)->name, name ))
-        {
-            PROFILESECTION *to_del = *section;
-            *section = to_del->next;
-            to_del->next = NULL;
-            PROFILE_Free( to_del );
-            return TRUE;
-        }
-        section = &(*section)->next;
-    }
-    return FALSE;
-}
-
-
-/***********************************************************************
  *           PROFILE_DeleteKey
  *
  * Delete a key from a profile tree.
@@ -922,6 +899,37 @@ static INT PROFILE_GetSection( const WCHAR *filename, LPCWSTR section_name,
     return 0;
 }
 
+static BOOL PROFILE_DeleteSection( const WCHAR *filename, const WCHAR *name )
+{
+    PROFILESECTION **section;
+
+    EnterCriticalSection( &PROFILE_CritSect );
+
+    if (!PROFILE_Open( filename, TRUE ))
+    {
+        LeaveCriticalSection( &PROFILE_CritSect );
+        return FALSE;
+    }
+
+    for (section = &CurProfile->section; *section; section = &(*section)->next)
+    {
+        if (!strcmpiW( (*section)->name, name ))
+        {
+            PROFILESECTION *to_del = *section;
+            *section = to_del->next;
+            to_del->next = NULL;
+            PROFILE_Free( to_del );
+            CurProfile->changed = TRUE;
+            PROFILE_FlushFile();
+            break;
+        }
+    }
+
+    LeaveCriticalSection( &PROFILE_CritSect );
+    return TRUE;
+}
+
+
 /* See GetPrivateProfileSectionNamesA for documentation */
 static INT PROFILE_GetSectionNames( LPWSTR buffer, UINT len )
 {
@@ -971,15 +979,7 @@ static INT PROFILE_GetSectionNames( LPWSTR buffer, UINT len )
 static BOOL PROFILE_SetString( LPCWSTR section_name, LPCWSTR key_name,
                                LPCWSTR value, BOOL create_always )
 {
-    if (!key_name)  /* Delete a whole section */
-    {
-        TRACE("(%s)\n", debugstr_w(section_name));
-        CurProfile->changed |= PROFILE_DeleteSection( &CurProfile->section,
-                                                      section_name );
-        return TRUE;         /* Even if PROFILE_DeleteSection() has failed,
-                                this is not an error on application's level.*/
-    }
-    else if (!value)  /* Delete a key */
+    if (!value)  /* Delete a key */
     {
         TRACE("(%s,%s)\n", debugstr_w(section_name), debugstr_w(key_name) );
         CurProfile->changed |= PROFILE_DeleteKey( &CurProfile->section,
@@ -1324,26 +1324,30 @@ BOOL WINAPI WritePrivateProfileStringW( LPCWSTR section, LPCWSTR entry,
 {
     BOOL ret = FALSE;
 
-    RtlEnterCriticalSection( &PROFILE_CritSect );
-
     if (!section && !entry && !string) /* documented "file flush" case */
     {
+        EnterCriticalSection( &PROFILE_CritSect );
         if (!filename || PROFILE_Open( filename, TRUE ))
         {
-            if (CurProfile) PROFILE_ReleaseFile();  /* always return FALSE in this case */
+            if (CurProfile) PROFILE_ReleaseFile();
         }
+        LeaveCriticalSection( &PROFILE_CritSect );
+        return FALSE;
     }
-    else if (PROFILE_Open( filename, TRUE ))
+    if (!entry) return PROFILE_DeleteSection( filename, section );
+
+    EnterCriticalSection( &PROFILE_CritSect );
+
+    if (PROFILE_Open( filename, TRUE ))
     {
-        if (!section) {
+        if (!section)
             SetLastError(ERROR_FILE_NOT_FOUND);
-        } else {
+        else
             ret = PROFILE_SetString( section, entry, string, FALSE);
-            if (ret) ret = PROFILE_FlushFile();
-        }
+        if (ret) ret = PROFILE_FlushFile();
     }
 
-    RtlLeaveCriticalSection( &PROFILE_CritSect );
+    LeaveCriticalSection( &PROFILE_CritSect );
     return ret;
 }
 
@@ -1383,36 +1387,40 @@ BOOL WINAPI WritePrivateProfileSectionW( LPCWSTR section,
     BOOL ret = FALSE;
     LPWSTR p;
 
-    RtlEnterCriticalSection( &PROFILE_CritSect );
-
     if (!section && !string)
     {
+        EnterCriticalSection( &PROFILE_CritSect );
         if (!filename || PROFILE_Open( filename, TRUE ))
         {
-            if (CurProfile) PROFILE_ReleaseFile();  /* always return FALSE in this case */
+            if (CurProfile) PROFILE_ReleaseFile();
         }
+        LeaveCriticalSection( &PROFILE_CritSect );
+        return FALSE;
     }
-    else if (PROFILE_Open( filename, TRUE )) {
-        if (!string) {/* delete the named section*/
-	    ret = PROFILE_SetString(section,NULL,NULL, FALSE);
-        } else {
-	    PROFILE_DeleteAllKeys(section);
-	    ret = TRUE;
-	    while(*string && ret) {
-                LPWSTR buf = HeapAlloc( GetProcessHeap(), 0, (strlenW(string)+1) * sizeof(WCHAR) );
-                strcpyW( buf, string );
-                if((p = strchrW( buf, '='))) {
-                    *p='\0';
-                    ret = PROFILE_SetString( section, buf, p+1, TRUE);
-                }
-                HeapFree( GetProcessHeap(), 0, buf );
-                string += strlenW(string)+1;
+    if (!string) return PROFILE_DeleteSection( filename, section );
+
+    EnterCriticalSection( &PROFILE_CritSect );
+
+    if (PROFILE_Open( filename, TRUE ))
+    {
+        PROFILE_DeleteAllKeys(section);
+        ret = TRUE;
+        while (*string && ret)
+        {
+            WCHAR *buf = HeapAlloc( GetProcessHeap(), 0, (strlenW( string ) + 1) * sizeof(WCHAR) );
+            strcpyW( buf, string );
+            if ((p = strchrW( buf, '=')))
+            {
+                *p = '\0';
+                ret = PROFILE_SetString( section, buf, p+1, TRUE );
             }
+            HeapFree( GetProcessHeap(), 0, buf );
+            string += strlenW( string ) + 1;
         }
         if (ret) ret = PROFILE_FlushFile();
     }
 
-    RtlLeaveCriticalSection( &PROFILE_CritSect );
+    LeaveCriticalSection( &PROFILE_CritSect );
     return ret;
 }
 

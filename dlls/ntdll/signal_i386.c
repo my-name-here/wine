@@ -95,6 +95,8 @@ static inline struct x86_thread_data *x86_thread_data(void)
     return (struct x86_thread_data *)NtCurrentTeb()->SystemReserved2;
 }
 
+struct ldt_copy *__wine_ldt_copy = NULL;
+
 /* Exception record for handling exceptions happening inside exception handlers */
 typedef struct
 {
@@ -360,7 +362,7 @@ NTSTATUS CDECL DECLSPEC_HIDDEN __regs_NtGetContextThread( DWORD edi, DWORD esi, 
     {
         context->Ebp    = ebp;
         context->Esp    = (DWORD)&retaddr;
-        context->Eip    = *(&edi - 1);
+        context->Eip    = (DWORD)NtGetContextThread + 12;
         context->EFlags = eflags;
     }
     return unix_funcs->NtGetContextThread( handle, context );

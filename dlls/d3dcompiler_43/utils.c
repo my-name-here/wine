@@ -1328,7 +1328,7 @@ struct hlsl_ir_node *add_implicit_conversion(struct list *instrs, struct hlsl_ir
     return &cast->node;
 }
 
-struct hlsl_ir_expr *new_expr(enum hlsl_ir_expr_op op, struct hlsl_ir_node **operands,
+struct hlsl_ir_expr *add_expr(struct list *instrs, enum hlsl_ir_expr_op op, struct hlsl_ir_node *operands[3],
         struct source_location *loc)
 {
     struct hlsl_ir_expr *expr;
@@ -1372,6 +1372,7 @@ struct hlsl_ir_expr *new_expr(enum hlsl_ir_expr_op op, struct hlsl_ir_node **ope
     expr->operands[0] = operands[0];
     expr->operands[1] = operands[1];
     expr->operands[2] = operands[2];
+    list_add_tail(instrs, &expr->node.entry);
 
     return expr;
 }
@@ -1519,7 +1520,7 @@ struct hlsl_ir_node *add_assignment(struct list *instrs, struct hlsl_ir_node *lh
         struct hlsl_ir_node *expr;
 
         TRACE("Adding an expression for the compound assignment.\n");
-        expr = new_binary_expr(op, lhs, rhs, lhs->loc);
+        expr = new_binary_expr(op, lhs, rhs);
         list_add_after(&rhs->entry, &expr->entry);
         rhs = expr;
     }
@@ -1805,9 +1806,11 @@ static void debug_dump_ir_var(const struct hlsl_ir_var *var)
 
 static void debug_dump_deref(const struct hlsl_deref *deref)
 {
-    wine_dbg_printf("deref(");
-    debug_dump_ir_var(deref->var);
-    wine_dbg_printf(")");
+    if (deref->offset)
+        /* Print the variable's type for convenience. */
+        wine_dbg_printf("(%s %s)", debug_hlsl_type(deref->var->data_type), deref->var->name);
+    else
+        wine_dbg_printf("%s", deref->var->name);
     if (deref->offset)
     {
         wine_dbg_printf("[");
@@ -2044,6 +2047,9 @@ static void debug_dump_instr(const struct hlsl_ir_node *instr)
         wine_dbg_printf("%4u: ", instr->index);
     else
         wine_dbg_printf("%p: ", instr);
+
+    wine_dbg_printf("%10s | ", instr->data_type ? debug_hlsl_type(instr->data_type) : "");
+
     switch (instr->type)
     {
         case HLSL_IR_EXPR:

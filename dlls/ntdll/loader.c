@@ -153,6 +153,20 @@ static CRITICAL_SECTION_DEBUG dlldir_critsect_debug =
 };
 static CRITICAL_SECTION dlldir_section = { &dlldir_critsect_debug, -1, 0, 0, 0, 0 };
 
+static RTL_CRITICAL_SECTION peb_lock;
+static RTL_CRITICAL_SECTION_DEBUG peb_critsect_debug =
+{
+    0, 0, &peb_lock,
+    { &peb_critsect_debug.ProcessLocksList, &peb_critsect_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": peb_lock") }
+};
+static RTL_CRITICAL_SECTION peb_lock = { &peb_critsect_debug, -1, 0, 0, 0, 0 };
+
+static PEB_LDR_DATA ldr = { sizeof(ldr), TRUE };
+static RTL_BITMAP tls_bitmap;
+static RTL_BITMAP tls_expansion_bitmap;
+static RTL_BITMAP fls_bitmap;
+
 static WINE_MODREF *cached_modref;
 static WINE_MODREF *current_modref;
 static WINE_MODREF *last_failed_modref;
@@ -3900,33 +3914,6 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, LPVOID reserved )
 }
 
 
-static NTSTATUS load_ntdll_so( HMODULE module, const IMAGE_NT_HEADERS *nt )
-{
-    NTSTATUS (__cdecl *init_func)( HMODULE module, const void *ptr_in, void *ptr_out );
-    Dl_info info;
-    char *name;
-    void *handle;
-
-    if (!dladdr( load_ntdll_so, &info ))
-    {
-        fprintf( stderr, "cannot get path to ntdll.dll.so\n" );
-        exit(1);
-    }
-    name = strdup( info.dli_fname );
-    strcpy( name + strlen(name) - strlen(".dll.so"), ".so" );
-    if (!(handle = dlopen( name, RTLD_NOW )))
-    {
-        fprintf( stderr, "failed to load %s: %s\n", name, dlerror() );
-        exit(1);
-    }
-    if (!(init_func = dlsym( handle, "__wine_init_unix_lib" )))
-    {
-        fprintf( stderr, "init func not found in %s\n", name );
-        exit(1);
-    }
-    return init_func( module, nt, &unix_funcs );
-}
-
 /***********************************************************************
  *           __wine_process_init
  */
@@ -3947,20 +3934,41 @@ void __wine_process_init(void)
     UNICODE_STRING nt_name;
     HMODULE ntdll_module = (HMODULE)((__wine_spec_nt_header.OptionalHeader.ImageBase + 0xffff) & ~0xffff);
     INITIAL_TEB stack;
-    SIZE_T info_size;
-    TEB *teb;
-    PEB *peb;
+    ULONG_PTR val;
+    TEB *teb = NtCurrentTeb();
+    PEB *peb = teb->Peb;
 
-    if (!unix_funcs) load_ntdll_so( ntdll_module, &__wine_spec_nt_header );
+    peb->LdrData            = &ldr;
+    peb->FastPebLock        = &peb_lock;
+    peb->TlsBitmap          = &tls_bitmap;
+    peb->TlsExpansionBitmap = &tls_expansion_bitmap;
+    peb->FlsBitmap          = &fls_bitmap;
+    peb->LoaderLock         = &loader_section;
+    peb->OSMajorVersion     = 5;
+    peb->OSMinorVersion     = 1;
+    peb->OSBuildNumber      = 0xA28;
+    peb->OSPlatformId       = VER_PLATFORM_WIN32_NT;
+    peb->SessionId          = 1;
+    peb->ProcessHeap        = RtlCreateHeap( HEAP_GROWABLE, NULL, 0, 0, NULL, NULL );
 
-    teb = thread_init( &info_size );
-    peb = teb->Peb;
-    peb->ProcessHeap = RtlCreateHeap( HEAP_GROWABLE, NULL, 0, 0, NULL, NULL );
-    peb->LoaderLock = &loader_section;
+    InitializeListHead( &peb->FlsListHead );
+    RtlInitializeBitMap( &tls_bitmap, peb->TlsBitmapBits, sizeof(peb->TlsBitmapBits) * 8 );
+    RtlInitializeBitMap( &tls_expansion_bitmap, peb->TlsExpansionBitmapBits,
+                         sizeof(peb->TlsExpansionBitmapBits) * 8 );
+    RtlInitializeBitMap( &fls_bitmap, peb->FlsBitmapBits, sizeof(peb->FlsBitmapBits) * 8 );
+    RtlSetBits( peb->TlsBitmap, 0, 1 ); /* TLS index 0 is reserved and should be initialized to NULL. */
+    RtlSetBits( peb->FlsBitmap, 0, 1 );
+
+    InitializeListHead( &ldr.InLoadOrderModuleList );
+    InitializeListHead( &ldr.InMemoryOrderModuleList );
+    InitializeListHead( &ldr.InInitializationOrderModuleList );
+
+    NtQueryInformationProcess( GetCurrentProcess(), ProcessWow64Information, &val, sizeof(val), NULL );
+    is_wow64 = !!val;
 
     init_unix_codepage();
     init_directories();
-    init_user_process_params( info_size );
+    init_user_process_params();
     params = peb->ProcessParameters;
 
     load_global_options();
@@ -3975,14 +3983,14 @@ void __wine_process_init(void)
     if ((status = load_builtin_dll( params->DllPath.Buffer, &nt_name, NULL, 0, &wm )) != STATUS_SUCCESS)
     {
         MESSAGE( "wine: could not load kernel32.dll, status %x\n", status );
-        exit(1);
+        NtTerminateProcess( GetCurrentProcess(), status );
     }
     RtlInitAnsiString( &func_name, "__wine_start_process" );
     if ((status = LdrGetProcedureAddress( wm->ldr.DllBase, &func_name,
                                           0, (void **)&kernel32_start_process )) != STATUS_SUCCESS)
     {
         MESSAGE( "wine: could not find __wine_start_process in kernel32.dll, status %x\n", status );
-        exit(1);
+        NtTerminateProcess( GetCurrentProcess(), status );
     }
 
     init_locale( wm->ldr.DllBase );
@@ -4000,7 +4008,7 @@ void __wine_process_init(void)
     }
     else
     {
-        if (!info_size) status = restart_process( params, status );
+        status = restart_process( params, status );
         switch (status)
         {
         case STATUS_INVALID_IMAGE_WIN_64:

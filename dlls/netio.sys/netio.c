@@ -1,7 +1,7 @@
 /*
  * WSK (Winsock Kernel) driver library.
  *
- * Copyright 2020 Paul Gofman <pgofman@codeweavers.com> for Codeweavers
+ * Copyright 2020 Paul Gofman <pgofman@codeweavers.com> for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -605,7 +605,7 @@ static void WINAPI send_receive_callback(TP_CALLBACK_INSTANCE *instance, void *s
     unlock_socket(socket);
 }
 
-static NTSTATUS WINAPI do_send_receive(WSK_SOCKET *socket, WSK_BUF *wsk_buf, ULONG flags, IRP *irp, BOOL is_send)
+static NTSTATUS do_send_receive(WSK_SOCKET *socket, WSK_BUF *wsk_buf, ULONG flags, IRP *irp, BOOL is_send)
 {
     struct wsk_socket_internal *s = wsk_socket_internal_from_wsk_socket(socket);
     struct wsk_pending_io *io;

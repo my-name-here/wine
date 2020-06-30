@@ -329,7 +329,7 @@ struct thread *create_thread( int fd, struct process *process, const struct secu
     thread->affinity = process->affinity;
     if (!current) current = thread;
 
-    list_add_head( &thread_list, &thread->entry );
+    list_add_tail( &thread_list, &thread->entry );
 
     if (sd && !set_sd_defaults_from_token( &thread->obj, sd,
                                            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
@@ -1554,6 +1554,8 @@ DECL_HANDLER(get_thread_times)
     {
         reply->creation_time  = thread->creation_time;
         reply->exit_time      = thread->exit_time;
+        reply->unix_pid       = thread->unix_pid;
+        reply->unix_tid       = thread->unix_tid;
 
         release_object( thread );
     }

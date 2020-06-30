@@ -24,12 +24,11 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 
-struct ldt_copy;
 struct msghdr;
 struct _DISPATCHER_CONTEXT;
 
 /* increment this when you change the function table */
-#define NTDLL_UNIXLIB_VERSION 64
+#define NTDLL_UNIXLIB_VERSION 69
 
 struct unix_funcs
 {
@@ -299,7 +298,10 @@ struct unix_funcs
 
     /* environment functions */
     NTSTATUS      (CDECL *get_initial_environment)( WCHAR **wargv[], WCHAR *env, SIZE_T *size );
+    NTSTATUS      (CDECL *get_startup_info)( startup_info_t *info, SIZE_T *total_size, SIZE_T *info_size );
     NTSTATUS      (CDECL *get_dynamic_environment)( WCHAR *env, SIZE_T *size );
+    void          (CDECL *get_initial_console)( HANDLE *handle, HANDLE *std_in,
+                                                HANDLE *std_out, HANDLE *std_err );
     void          (CDECL *get_initial_directory)( UNICODE_STRING *dir );
     void          (CDECL *get_unix_codepage)( CPTABLEINFO *table );
     void          (CDECL *get_locales)( WCHAR *sys, WCHAR *user );
@@ -317,7 +319,6 @@ struct unix_funcs
     void          (CDECL *virtual_set_large_address_space)(void);
 
     /* thread/process functions */
-    TEB *         (CDECL *init_threading)( int *nb_threads_ptr, struct ldt_copy **ldt_copy, SIZE_T *size );
     void          (CDECL *exit_thread)( int status );
     void          (CDECL *exit_process)( int status );
     NTSTATUS      (CDECL *exec_process)( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTSTATUS status );
