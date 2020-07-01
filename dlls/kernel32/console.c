@@ -76,9 +76,6 @@ static CRITICAL_SECTION CONSOLE_CritSect = { &critsect_debug, -1, 0, 0, 0, 0 };
 static const WCHAR coninW[] = {'C','O','N','I','N','$',0};
 static const WCHAR conoutW[] = {'C','O','N','O','U','T','$',0};
 
-/* FIXME: this is not thread safe */
-static HANDLE console_wait_event;
-
 /* map input records to ASCII */
 static void input_records_WtoA( INPUT_RECORD *buffer, int count )
 {
@@ -302,16 +299,7 @@ BOOL WINAPI CloseConsoleHandle(HANDLE handle)
  */
 HANDLE WINAPI GetConsoleInputWaitHandle(void)
 {
-    if (!console_wait_event)
-    {
-        SERVER_START_REQ(get_console_wait_event)
-        {
-            if (!wine_server_call_err( req ))
-                console_wait_event = wine_server_ptr_handle( reply->event );
-        }
-        SERVER_END_REQ;
-    }
-    return console_wait_event;
+    return GetStdHandle( STD_INPUT_HANDLE );
 }
 
 
@@ -425,7 +413,7 @@ static enum read_console_input_return read_console_input(HANDLE handle, PINPUT_R
     if ((fd = get_console_bare_fd(handle)) != -1)
     {
         put_console_into_raw_mode(fd);
-        if (WaitForSingleObject(GetConsoleInputWaitHandle(), 0) != WAIT_OBJECT_0)
+        if (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0)
         {
             ret = bare_console_fetch_input(handle, fd, timeout);
         }
@@ -437,7 +425,7 @@ static enum read_console_input_return read_console_input(HANDLE handle, PINPUT_R
     {
         if (!VerifyConsoleIoHandle(handle)) return rci_error;
 
-        if (WaitForSingleObject(GetConsoleInputWaitHandle(), timeout) != WAIT_OBJECT_0)
+        if (WaitForSingleObject(handle, timeout) != WAIT_OBJECT_0)
             return rci_timeout;
     }
 
@@ -530,197 +518,6 @@ DWORD WINAPI GetConsoleTitleA(LPSTR title, DWORD size)
 
 static WCHAR*	S_EditString /* = NULL */;
 static unsigned S_EditStrPos /* = 0 */;
-
-/***********************************************************************
- *            FreeConsole (KERNEL32.@)
- */
-BOOL WINAPI FreeConsole(VOID)
-{
-    BOOL ret;
-
-    /* invalidate local copy of input event handle */
-    console_wait_event = 0;
-
-    SERVER_START_REQ(free_console)
-    {
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-    return ret;
-}
-
-/******************************************************************
- *		start_console_renderer
- *
- * helper for AllocConsole
- * starts the renderer process
- */
-static  BOOL    start_console_renderer_helper(const char* appname, STARTUPINFOA* si,
-                                              HANDLE hEvent)
-{
-    char		buffer[1024];
-    int                 ret;
-    PROCESS_INFORMATION	pi;
-
-    /* FIXME: use dynamic allocation for most of the buffers below */
-    ret = snprintf(buffer, sizeof(buffer), "%s --use-event=%ld", appname, (DWORD_PTR)hEvent);
-    if ((ret > -1) && (ret < sizeof(buffer)) &&
-        CreateProcessA(NULL, buffer, NULL, NULL, TRUE, DETACHED_PROCESS,
-                       NULL, NULL, si, &pi))
-    {
-        HANDLE  wh[2];
-        DWORD   res;
-
-        wh[0] = hEvent;
-        wh[1] = pi.hProcess;
-        res = WaitForMultipleObjects(2, wh, FALSE, INFINITE);
-
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-
-        if (res != WAIT_OBJECT_0) return FALSE;
-
-        TRACE("Started wineconsole pid=%08x tid=%08x\n",
-              pi.dwProcessId, pi.dwThreadId);
-
-        return TRUE;
-    }
-    return FALSE;
-}
-
-static	BOOL	start_console_renderer(STARTUPINFOA* si)
-{
-    HANDLE		hEvent = 0;
-    LPSTR		p;
-    OBJECT_ATTRIBUTES	attr;
-    BOOL                ret = FALSE;
-
-    attr.Length                   = sizeof(attr);
-    attr.RootDirectory            = 0;
-    attr.Attributes               = OBJ_INHERIT;
-    attr.ObjectName               = NULL;
-    attr.SecurityDescriptor       = NULL;
-    attr.SecurityQualityOfService = NULL;
-
-    NtCreateEvent(&hEvent, EVENT_ALL_ACCESS, &attr, NotificationEvent, FALSE);
-    if (!hEvent) return FALSE;
-
-    /* first try environment variable */
-    if ((p = getenv("WINECONSOLE")) != NULL)
-    {
-        ret = start_console_renderer_helper(p, si, hEvent);
-        if (!ret)
-            ERR("Couldn't launch Wine console from WINECONSOLE env var (%s)... "
-                "trying default access\n", p);
-    }
-
-    /* then try the regular PATH */
-    if (!ret)
-        ret = start_console_renderer_helper("wineconsole", si, hEvent);
-
-    CloseHandle(hEvent);
-    return ret;
-}
-
-/***********************************************************************
- *            AllocConsole (KERNEL32.@)
- *
- * creates an xterm with a pty to our program
- */
-BOOL WINAPI AllocConsole(void)
-{
-    HANDLE 		handle_in = INVALID_HANDLE_VALUE;
-    HANDLE		handle_out = INVALID_HANDLE_VALUE;
-    HANDLE 		handle_err = INVALID_HANDLE_VALUE;
-    STARTUPINFOA        siCurrent;
-    STARTUPINFOA	siConsole;
-    char                buffer[1024];
-
-    TRACE("()\n");
-
-    handle_in = OpenConsoleW( coninW, GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE,
-                              FALSE, OPEN_EXISTING );
-
-    if (VerifyConsoleIoHandle(handle_in))
-    {
-	/* we already have a console opened on this process, don't create a new one */
-	CloseHandle(handle_in);
-	return FALSE;
-    }
-
-    /* invalidate local copy of input event handle */
-    console_wait_event = 0;
-
-    GetStartupInfoA(&siCurrent);
-
-    memset(&siConsole, 0, sizeof(siConsole));
-    siConsole.cb = sizeof(siConsole);
-    /* setup a view arguments for wineconsole (it'll use them as default values)  */
-    if (siCurrent.dwFlags & STARTF_USECOUNTCHARS)
-    {
-        siConsole.dwFlags |= STARTF_USECOUNTCHARS;
-        siConsole.dwXCountChars = siCurrent.dwXCountChars;
-        siConsole.dwYCountChars = siCurrent.dwYCountChars;
-    }
-    if (siCurrent.dwFlags & STARTF_USEFILLATTRIBUTE)
-    {
-        siConsole.dwFlags |= STARTF_USEFILLATTRIBUTE;
-        siConsole.dwFillAttribute = siCurrent.dwFillAttribute;
-    }
-    if (siCurrent.dwFlags & STARTF_USESHOWWINDOW)
-    {
-        siConsole.dwFlags |= STARTF_USESHOWWINDOW;
-        siConsole.wShowWindow = siCurrent.wShowWindow;
-    }
-    /* FIXME (should pass the unicode form) */
-    if (siCurrent.lpTitle)
-        siConsole.lpTitle = siCurrent.lpTitle;
-    else if (GetModuleFileNameA(0, buffer, sizeof(buffer)))
-    {
-        buffer[sizeof(buffer) - 1] = '\0';
-        siConsole.lpTitle = buffer;
-    }
-
-    if (!start_console_renderer(&siConsole))
-	goto the_end;
-
-    if( !(siCurrent.dwFlags & STARTF_USESTDHANDLES) ) {
-        /* all std I/O handles are inheritable by default */
-        handle_in = OpenConsoleW( coninW, GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE,
-                                  TRUE, OPEN_EXISTING );
-        if (handle_in == INVALID_HANDLE_VALUE) goto the_end;
-  
-        handle_out = OpenConsoleW( conoutW, GENERIC_READ|GENERIC_WRITE,
-                                   TRUE, OPEN_EXISTING );
-        if (handle_out == INVALID_HANDLE_VALUE) goto the_end;
-  
-        if (!DuplicateHandle(GetCurrentProcess(), handle_out, GetCurrentProcess(),
-                    &handle_err, 0, TRUE, DUPLICATE_SAME_ACCESS))
-            goto the_end;
-    } else {
-        /*  STARTF_USESTDHANDLES flag: use handles from StartupInfo */
-        handle_in  =  siCurrent.hStdInput;
-        handle_out =  siCurrent.hStdOutput;
-        handle_err =  siCurrent.hStdError;
-    }
-
-    /* NT resets the STD_*_HANDLEs on console alloc */
-    SetStdHandle(STD_INPUT_HANDLE,  handle_in);
-    SetStdHandle(STD_OUTPUT_HANDLE, handle_out);
-    SetStdHandle(STD_ERROR_HANDLE,  handle_err);
-
-    SetLastError(ERROR_SUCCESS);
-
-    return TRUE;
-
- the_end:
-    ERR("Can't allocate console\n");
-    if (handle_in != INVALID_HANDLE_VALUE)	CloseHandle(handle_in);
-    if (handle_out != INVALID_HANDLE_VALUE)	CloseHandle(handle_out);
-    if (handle_err != INVALID_HANDLE_VALUE)	CloseHandle(handle_err);
-    FreeConsole();
-    return FALSE;
-}
 
 
 /***********************************************************************

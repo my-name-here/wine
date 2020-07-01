@@ -415,7 +415,7 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL 
     if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
         NtSetContextThread( GetCurrentThread(), context );
 
-    if (first_chance) pKiUserExceptionDispatcher( rec, context );
+    if (first_chance) call_user_exception_dispatcher( rec, context );
 
     if (rec->ExceptionFlags & EH_STACK_INVALID)
         ERR("Exception frame is not in stack limits => unable to dispatch exception.\n");
@@ -867,7 +867,6 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
         SERVER_START_REQ( get_thread_info )
         {
             req->handle = wine_server_obj_handle( handle );
-            req->tid_in = 0;
             if (!(status = wine_server_call( req )))
             {
                 info.ExitStatus             = reply->exit_code;
@@ -896,7 +895,7 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
         SERVER_START_REQ( get_thread_info )
         {
             req->handle = wine_server_obj_handle( handle );
-            req->tid_in = 0;
+            req->access = THREAD_QUERY_INFORMATION;
             if (!(status = wine_server_call( req ))) affinity = reply->affinity & affinity_mask;
         }
         SERVER_END_REQ;
@@ -958,7 +957,6 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
         SERVER_START_REQ( get_thread_info )
         {
             req->handle = wine_server_obj_handle( handle );
-            req->tid_in = 0;
             status = wine_server_call( req );
             if (status == STATUS_SUCCESS)
             {
@@ -976,7 +974,7 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
         SERVER_START_REQ( get_thread_info )
         {
             req->handle = wine_server_obj_handle( handle );
-            req->tid_in = 0;
+            req->access = THREAD_QUERY_INFORMATION;
             status = wine_server_call( req );
             if (status == STATUS_SUCCESS)
             {
@@ -1000,7 +998,6 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
         SERVER_START_REQ( get_thread_info )
         {
             req->handle = wine_server_obj_handle( handle );
-            req->tid_in = 0;
             if (!(status = wine_server_call( req ))) affinity.Mask = reply->affinity & affinity_mask;
         }
         SERVER_END_REQ;
@@ -1027,7 +1024,6 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
         SERVER_START_REQ( get_thread_info )
         {
             req->handle = wine_server_obj_handle( handle );
-            req->tid_in = 0;
             if (!(status = wine_server_call( req ))) *(ULONG *)data = reply->suspend_count;
         }
         SERVER_END_REQ;
@@ -1086,8 +1082,14 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
     case ThreadHideFromDebugger:
         if (length != sizeof(BOOLEAN)) return STATUS_INFO_LENGTH_MISMATCH;
         if (!data) return STATUS_ACCESS_VIOLATION;
-        if (handle != GetCurrentThread()) return STATUS_ACCESS_DENIED;
-        *(BOOLEAN*)data = TRUE;
+        SERVER_START_REQ( get_thread_info )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            req->access = THREAD_QUERY_INFORMATION;
+            if ((status = wine_server_call( req ))) return status;
+            *(BOOLEAN*)data = reply->dbg_hidden;
+        }
+        SERVER_END_REQ;
         if (ret_len) *ret_len = sizeof(BOOLEAN);
         return STATUS_SUCCESS;
 
@@ -1183,9 +1185,14 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
 
     case ThreadHideFromDebugger:
         if (length) return STATUS_INFO_LENGTH_MISMATCH;
-        if (handle != GetCurrentThread()) return STATUS_INVALID_HANDLE;
-        /* pretend the call succeeded to satisfy some code protectors */
-        return STATUS_SUCCESS;
+        SERVER_START_REQ( set_thread_info )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            req->mask   = SET_THREAD_INFO_DBG_HIDDEN;
+            status = wine_server_call( req );
+        }
+        SERVER_END_REQ;
+        return status;
 
     case ThreadQuerySetWin32StartAddress:
     {

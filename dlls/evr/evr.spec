@@ -14,10 +14,10 @@
 @ stub MFCreateVideoMediaTypeFromVideoInfoHeader2
 @ stub MFCreateVideoMediaTypeFromVideoInfoHeader
 @ stdcall MFCreateVideoMixer(ptr ptr ptr ptr)
-@ stub MFCreateVideoMixerAndPresenter
+@ stdcall MFCreateVideoMixerAndPresenter(ptr ptr ptr ptr ptr ptr)
 @ stub MFCreateVideoOTA
 @ stub MFCreateVideoPresenter2
-@ stub MFCreateVideoPresenter
+@ stdcall MFCreateVideoPresenter(ptr ptr ptr ptr)
 @ stub MFCreateVideoSampleAllocator
 @ stdcall MFCreateVideoSampleFromSurface(ptr ptr)
 @ stub MFGetPlaneSize

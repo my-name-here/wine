@@ -117,7 +117,9 @@ static IUnknown test_outer = {&outer_vtbl};
 static void test_aggregation(void)
 {
     IBaseFilter *filter, *filter2;
+    IMFVideoPresenter *presenter;
     IUnknown *unk, *unk2;
+    IMFTransform *mixer;
     HRESULT hr;
     ULONG ref;
 
@@ -171,6 +173,41 @@ static void test_aggregation(void)
     ref = IUnknown_Release(unk);
     ok(!ref, "Got unexpected refcount %d.\n", ref);
     ok(outer_ref == 1, "Got unexpected refcount %d.\n", outer_ref);
+
+    /* Default presenter. */
+    presenter = (void *)0xdeadbeef;
+    hr = CoCreateInstance(&CLSID_MFVideoPresenter9, &test_outer, CLSCTX_INPROC_SERVER, &IID_IMFVideoPresenter,
+            (void **)&presenter);
+    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(!presenter, "Got interface %p.\n", presenter);
+
+    hr = CoCreateInstance(&CLSID_MFVideoPresenter9, &test_outer, CLSCTX_INPROC_SERVER, &IID_IUnknown, (void **)&unk);
+    ok(hr == S_OK || broken(hr == E_FAIL) /* WinXP */, "Unexpected hr %#x.\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        ok(outer_ref == 1, "Got unexpected refcount %d.\n", outer_ref);
+        ok(unk != &test_outer, "Returned IUnknown should not be outer IUnknown.\n");
+        ref = get_refcount(unk);
+        ok(ref == 1, "Got unexpected refcount %d.\n", ref);
+
+        IUnknown_Release(unk);
+    }
+
+    /* Default mixer. */
+    presenter = (void *)0xdeadbeef;
+    hr = CoCreateInstance(&CLSID_MFVideoMixer9, &test_outer, CLSCTX_INPROC_SERVER, &IID_IMFTransform,
+            (void **)&mixer);
+    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(!mixer, "Got interface %p.\n", mixer);
+
+    hr = CoCreateInstance(&CLSID_MFVideoMixer9, &test_outer, CLSCTX_INPROC_SERVER, &IID_IUnknown, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(outer_ref == 1, "Got unexpected refcount %d.\n", outer_ref);
+    ok(unk != &test_outer, "Returned IUnknown should not be outer IUnknown.\n");
+    ref = get_refcount(unk);
+    ok(ref == 1, "Got unexpected refcount %d.\n", ref);
+
+    IUnknown_Release(unk);
 }
 
 #define check_interface(a, b, c) check_interface_(__LINE__, a, b, c)
@@ -846,6 +883,85 @@ done:
     DestroyWindow(window);
 }
 
+static void test_default_presenter(void)
+{
+    IMFVideoPresenter *presenter;
+    IMFRateSupport *rate_support;
+    IMFVideoDeviceID *deviceid;
+    IUnknown *unk;
+    float rate;
+    HRESULT hr;
+    GUID iid;
+
+    hr = MFCreateVideoPresenter(NULL, &IID_IMFVideoPresenter, &IID_IMFVideoPresenter, (void **)&presenter);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+
+    hr = MFCreateVideoPresenter(NULL, &IID_IDirect3DDevice9, &IID_IMFVideoPresenter, (void **)&presenter);
+    ok(hr == S_OK || broken(hr == E_FAIL) /* WinXP */, "Failed to create default presenter, hr %#x.\n", hr);
+    if (FAILED(hr))
+        return;
+
+    hr = IMFVideoPresenter_QueryInterface(presenter, &IID_IMFVideoDeviceID, (void **)&deviceid);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFVideoDeviceID_GetDeviceID(deviceid, NULL);
+    ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFVideoDeviceID_GetDeviceID(deviceid, &iid);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(IsEqualIID(&iid, &IID_IDirect3DDevice9), "Unexpected id %s.\n", wine_dbgstr_guid(&iid));
+
+    IMFVideoDeviceID_Release(deviceid);
+
+    hr = IMFVideoPresenter_QueryInterface(presenter, &IID_IMFTopologyServiceLookupClient, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    hr = IMFVideoPresenter_QueryInterface(presenter, &IID_IMFVideoDisplayControl, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    /* Rate support. */
+    hr = IMFVideoPresenter_QueryInterface(presenter, &IID_IMFRateSupport, (void **)&rate_support);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    rate = 1.0f;
+    hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_FORWARD, FALSE, &rate);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+    rate = 1.0f;
+    hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_FORWARD, TRUE, &rate);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+    rate = 1.0f;
+    hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_REVERSE, FALSE, &rate);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+    rate = 1.0f;
+    hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_REVERSE, TRUE, &rate);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+    IMFRateSupport_Release(rate_support);
+
+    IMFVideoPresenter_Release(presenter);
+}
+
+static void test_MFCreateVideoMixerAndPresenter(void)
+{
+    IUnknown *mixer, *presenter;
+    HRESULT hr;
+
+    hr = MFCreateVideoMixerAndPresenter(NULL, NULL, &IID_IUnknown, (void **)&mixer, &IID_IUnknown, (void **)&presenter);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    IUnknown_Release(mixer);
+    IUnknown_Release(presenter);
+}
+
 START_TEST(evr)
 {
     CoInitialize(NULL);
@@ -860,6 +976,8 @@ START_TEST(evr)
     test_default_mixer();
     test_default_mixer_type_negotiation();
     test_surface_sample();
+    test_default_presenter();
+    test_MFCreateVideoMixerAndPresenter();
 
     CoUninitialize();
 }

@@ -3217,6 +3217,12 @@ static void test_try_transform(void)
     r = MsiCloseHandle(hview);
     ok(r == ERROR_SUCCESS, "MsiCloseHandle failed\n");
 
+    query = "ALTER TABLE `_TransformView` FREE";
+    r = run_query( hdb, 0, query );
+    ok( r == ERROR_SUCCESS, "cannot free _TransformView table: %d\n", r );
+    r = run_query( hdb, 0, query );
+    ok( r == ERROR_BAD_QUERY_SYNTAX, "_TransformView table still exist: %d\n", r );
+
     r = MsiDatabaseApplyTransformA( hdb, mstfile, 0 );
     ok( r == ERROR_SUCCESS, "return code %d, should be ERROR_SUCCESS\n", r );
 
@@ -3944,16 +3950,28 @@ static void test_temporary_table(void)
 static void test_alter(void)
 {
     MSICONDITION cond;
-    MSIHANDLE hdb = 0;
+    MSIHANDLE hdb = 0, rec;
     const char *query;
     UINT r;
 
     hdb = create_db();
     ok( hdb, "failed to create db\n");
 
+    query = "CREATE TABLE `T` ( `B` SHORT NOT NULL TEMPORARY, `C` CHAR(255) TEMPORARY PRIMARY KEY `C`)";
+    r = run_query(hdb, 0, query);
+    ok(r == ERROR_SUCCESS, "failed to add table\n");
+
+    query = "SELECT * FROM `T`";
+    r = run_query(hdb, 0, query);
+    ok(r == ERROR_BAD_QUERY_SYNTAX, "expected ERROR_BAD_QUERY_SYNTAX, got %d\n", r);
+
     query = "CREATE TABLE `T` ( `B` SHORT NOT NULL TEMPORARY, `C` CHAR(255) TEMPORARY PRIMARY KEY `C`) HOLD";
     r = run_query(hdb, 0, query);
     ok(r == ERROR_SUCCESS, "failed to add table\n");
+
+    query = "SELECT * FROM `T`";
+    r = run_query(hdb, 0, query);
+    ok(r == ERROR_SUCCESS, "expected ERROR_SUCCESS, got %d\n", r);
 
     cond = MsiDatabaseIsTablePersistentA(hdb, "T");
     ok( cond == MSICONDITION_FALSE, "wrong return condition\n");
@@ -4002,6 +4020,10 @@ static void test_alter(void)
     r = run_query(hdb, 0, query);
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", r);
 
+    query = "SELECT * FROM `_Columns` WHERE `Table` = 'U' AND `Name` = 'C'";
+    r = do_query(hdb, query, &rec);
+    ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", r);
+
     /* add column C again */
     query = "ALTER TABLE `U` ADD `C` INTEGER";
     r = run_query(hdb, 0, query);
@@ -4018,6 +4040,10 @@ static void test_alter(void)
     query = "ALTER TABLE `U` ADD `D` INTEGER TEMPORARY HOLD";
     r = run_query(hdb, 0, query);
     ok(r == ERROR_BAD_QUERY_SYNTAX, "Expected ERROR_BAD_QUERY_SYNTAX, got %d\n", r);
+
+    query = "SELECT * FROM `_Columns` WHERE `Table` = 'U' AND `Name` = 'D'";
+    r = do_query(hdb, query, &rec);
+    ok(r == ERROR_NO_MORE_ITEMS, "Expected ERROR_NO_MORE_ITEMS, got %d\n", r);
 
     query = "INSERT INTO `U` ( `A`, `B`, `C`, `D` ) VALUES ( 5, 6, 7, 8 )";
     r = run_query(hdb, 0, query);

@@ -124,7 +124,7 @@ const char *build_dir = NULL;
 const char *config_dir = NULL;
 const char **dll_paths = NULL;
 const char *user_name = NULL;
-HMODULE ntdll_module = NULL;
+static HMODULE ntdll_module;
 
 struct file_id
 {
@@ -1295,10 +1295,22 @@ found:
  */
 static HMODULE load_ntdll(void)
 {
+    NTSTATUS status;
     void *module;
-    char *name = build_path( dll_dir, "ntdll.dll.so" );
-    NTSTATUS status = dlopen_dll( name, &module );
+    int fd;
+    char *name = build_path( dll_dir, "ntdll.dll" );
 
+    if ((fd = open( name, O_RDONLY )) != -1)
+    {
+        status = virtual_map_ntdll( fd, &module );
+        close( fd );
+    }
+    else
+    {
+        free( name );
+        name = build_path( dll_dir, "ntdll.dll.so" );
+        status = dlopen_dll( name, &module );
+    }
     if (status) fatal_error( "failed to load %s error %x\n", name, status );
     free( name );
     return module;
@@ -1497,7 +1509,7 @@ static struct unix_funcs unix_funcs =
     get_dynamic_environment,
     get_initial_console,
     get_initial_directory,
-    get_unix_codepage,
+    get_unix_codepage_data,
     get_locales,
     get_version,
     get_build_id,
@@ -1546,7 +1558,6 @@ static void start_main_thread(void)
     server_init_process();
     startup_info_size = server_init_thread( teb->Peb, &suspend );
     virtual_map_user_shared_data();
-    virtual_create_builtin_view( ntdll_module );
     init_cpu_info();
     init_files();
     NtCreateKeyedEvent( &keyed_event, GENERIC_READ | GENERIC_WRITE, NULL, 0 );
@@ -1818,11 +1829,4 @@ void __wine_main( int argc, char *argv[], char *envp[] )
     apple_main_thread();
 #endif
     start_main_thread();
-}
-
-
-BOOL WINAPI DECLSPEC_HIDDEN DllMain( HINSTANCE inst, DWORD reason, LPVOID reserved )
-{
-    if (reason == DLL_PROCESS_ATTACH) LdrDisableThreadCalloutsForDll( inst );
-    return TRUE;
 }

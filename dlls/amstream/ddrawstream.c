@@ -437,11 +437,16 @@ static HRESULT WINAPI ddraw_IDirectDrawMediaStream_CreateSample(IDirectDrawMedia
         IDirectDrawStreamSample **sample)
 {
     struct ddraw_stream *stream = impl_from_IDirectDrawMediaStream(iface);
+    HRESULT hr;
 
     TRACE("stream %p, surface %p, rect %s, flags %#x, sample %p.\n",
             stream, surface, wine_dbgstr_rect(rect), flags, sample);
 
-    return ddrawstreamsample_create(stream, surface, rect, sample);
+    EnterCriticalSection(&stream->cs);
+    hr = ddrawstreamsample_create(stream, surface, rect, sample);
+    LeaveCriticalSection(&stream->cs);
+
+    return hr;
 }
 
 static HRESULT WINAPI ddraw_IDirectDrawMediaStream_GetTimePerFrame(IDirectDrawMediaStream *iface,
@@ -627,22 +632,12 @@ static HRESULT WINAPI ddraw_sink_Connect(IPin *iface, IPin *peer, const AM_MEDIA
     return E_UNEXPECTED;
 }
 
-static BOOL check_media_type(const AM_MEDIA_TYPE *media_type)
+static BOOL check_media_type(const AM_MEDIA_TYPE *mt)
 {
-    if (IsEqualGUID(&media_type->majortype, &MEDIATYPE_Video))
-    {
-        if (IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB1) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB4) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB8)  ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB565) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB555) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB24) ||
-            IsEqualGUID(&media_type->subtype, &MEDIASUBTYPE_RGB32))
-        {
-            TRACE("Video sub-type %s matches\n", debugstr_guid(&media_type->subtype));
-            return TRUE;
-        }
-    }
+    if (IsEqualGUID(&mt->majortype, &MEDIATYPE_Video)
+            && IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_RGB8)
+            && IsEqualGUID(&mt->formattype, &FORMAT_VideoInfo))
+        return TRUE;
 
     return FALSE;
 }
@@ -793,7 +788,7 @@ static HRESULT WINAPI ddraw_sink_QueryId(IPin *iface, WCHAR **id)
 static HRESULT WINAPI ddraw_sink_QueryAccept(IPin *iface, const AM_MEDIA_TYPE *mt)
 {
     TRACE("iface %p, mt %p.\n", iface, mt);
-    return check_media_type(mt) ? S_OK : S_FALSE;
+    return check_media_type(mt) ? S_OK : VFW_E_TYPE_NOT_ACCEPTED;
 }
 
 static HRESULT WINAPI ddraw_sink_EnumMediaTypes(IPin *iface, IEnumMediaTypes **enum_media_types)
@@ -980,7 +975,6 @@ HRESULT ddraw_stream_create(IUnknown *outer, void **out)
     object->IMemInputPin_iface.lpVtbl = &ddraw_meminput_vtbl;
     object->IPin_iface.lpVtbl = &ddraw_sink_vtbl;
     object->ref = 1;
-    object->sample_refs = 0;
 
     InitializeCriticalSection(&object->cs);
 
@@ -1043,12 +1037,12 @@ static ULONG WINAPI ddraw_sample_Release(IDirectDrawStreamSample *iface)
 
     TRACE("(%p)->(): new ref = %u\n", iface, ref);
 
-    EnterCriticalSection(&sample->parent->cs);
-    InterlockedDecrement(&sample->parent->sample_refs);
-    LeaveCriticalSection(&sample->parent->cs);
-
     if (!ref)
     {
+        EnterCriticalSection(&sample->parent->cs);
+        --sample->parent->sample_refs;
+        LeaveCriticalSection(&sample->parent->cs);
+
         if (sample->surface)
             IDirectDrawSurface_Release(sample->surface);
         HeapFree(GetProcessHeap(), 0, sample);
@@ -1164,10 +1158,7 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
     object->IDirectDrawStreamSample_iface.lpVtbl = &DirectDrawStreamSample_Vtbl;
     object->ref = 1;
     object->parent = parent;
-
-    EnterCriticalSection(&parent->cs);
-    InterlockedIncrement(&parent->sample_refs);
-    LeaveCriticalSection(&parent->cs);
+    ++parent->sample_refs;
 
     if (surface)
     {

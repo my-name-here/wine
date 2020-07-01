@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Fabian Maurer
+ * Copyright 2020 Louis Lenders
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -16,25 +16,18 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma makedep register
+#include "wine/debug.h"
 
-[
-    helpstring("Enhanced Video Renderer"),
-    threading(both),
-    uuid(fa10746c-9b63-4b6c-bc49-fc300ea5f256)
-]
-coclass EnhancedVideoRenderer { interface IBaseFilter; }
+WINE_DEFAULT_DEBUG_CHANNEL(where);
 
-[
-    helpstring("MF Video Mixer"),
-    threading(both),
-    uuid(e474e05a-ab65-4f6a-827c-218b1baaf31f)
-]
-coclass MFVideoMixer9 { interface IMFTransform; }
+int __cdecl wmain(int argc, WCHAR *argv[])
+{
+    int i;
 
-[
-    helpstring("MF Video Presenter"),
-    threading(both),
-    uuid(98455561-5136-4d28-ab08-4cee40ea2781)
-]
-coclass MFVideoPresenter9 { interface IMFVideoPresenter; }
+    WINE_FIXME("stub:");
+    for (i = 0; i < argc; i++)
+        WINE_FIXME(" %s", wine_dbgstr_w(argv[i]));
+    WINE_FIXME("\n");
+
+    return 0;
+}

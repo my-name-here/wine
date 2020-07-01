@@ -1822,6 +1822,7 @@ enable_uninstaller
 enable_unlodctr
 enable_view
 enable_wevtutil
+enable_where
 enable_whoami
 enable_wineboot
 enable_winebrowser
@@ -8733,7 +8734,7 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
     WINELOADER_LDFLAGS="-Wl,-pie,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,wine_info.plist"
 
     wine_can_build_preloader=yes
-    WINEPRELOADER_LDFLAGS="-nostartfiles -nodefaultlibs -e _start -ldylib1.o -Wl,-image_base,0x7c400000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,wine_info.plist"
+    WINEPRELOADER_LDFLAGS="-nostartfiles -nodefaultlibs -e _start -ldylib1.o -Wl,-image_base,0x7d400000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,wine_info.plist"
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -Wl,-no_new_main -e _main" >&5
 $as_echo_n "checking whether the compiler supports -Wl,-no_new_main -e _main... " >&6; }
 if ${ac_cv_cflags__Wl__no_new_main__e__main+:} false; then :
@@ -9161,7 +9162,7 @@ $as_echo "$ac_cv_cflags__fPIC__Wl___export_dynamic" >&6; }
 if test "x$ac_cv_cflags__fPIC__Wl___export_dynamic" = xyes; then :
   WINELOADER_LDFLAGS="-Wl,--export-dynamic"
 fi
-    WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7c400000"
+    WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
     as_ac_var=`$as_echo "ac_cv_cflags_-fPIC -Wl,--rpath,\\$ORIGIN/../lib" | $as_tr_sh`
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -fPIC -Wl,--rpath,\$ORIGIN/../lib" >&5
 $as_echo_n "checking whether the compiler supports -fPIC -Wl,--rpath,\$ORIGIN/../lib... " >&6; }
@@ -9517,7 +9518,7 @@ $as_echo "$ac_cv_cflags__Wl___export_dynamic" >&6; }
 if test "x$ac_cv_cflags__Wl___export_dynamic" = xyes; then :
   WINELOADER_LDFLAGS="-Wl,--export-dynamic"
 fi
-      WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7c400000"
+      WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
 
       as_ac_var=`$as_echo "ac_cv_cflags_-Wl,--rpath,\\$ORIGIN/../lib" | $as_tr_sh`
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -Wl,--rpath,\$ORIGIN/../lib" >&5
@@ -9661,7 +9662,7 @@ $as_echo "$ac_cv_cflags__Wl__Ttext_segment_0x7bc00000" >&6; }
 if test "x$ac_cv_cflags__Wl__Ttext_segment_0x7bc00000" = xyes; then :
   case $host_os in
                            freebsd* | kfreebsd*-gnu) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,-Ttext-segment=0x60000000" ;;
-                           *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,-Ttext-segment=0x7c000000" ;;
+                           *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,-Ttext-segment=0x7d000000" ;;
                            esac
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -Wl,--section-start,.interp=${ELF_INTERP_ADDRESS}" >&5
@@ -9710,7 +9711,7 @@ if test $ac_cv_flags__start__interp_at_address = yes; then :
 _ACEOF
   case $host_os in
                                               freebsd* | kfreebsd*-gnu) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,--section-start,.interp=0x60000400" ;;
-                                              *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,--section-start,.interp=0x7c000400" ;;
+                                              *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,--section-start,.interp=0x7d000400" ;;
                                            esac
 fi
                            # Extract the first word of "prelink", so it can be a program name with args.
@@ -21498,6 +21499,7 @@ wine_fn_config_makefile programs/uninstaller enable_uninstaller
 wine_fn_config_makefile programs/unlodctr enable_unlodctr
 wine_fn_config_makefile programs/view enable_view
 wine_fn_config_makefile programs/wevtutil enable_wevtutil
+wine_fn_config_makefile programs/where enable_where
 wine_fn_config_makefile programs/whoami enable_whoami
 wine_fn_config_makefile programs/wineboot enable_wineboot
 wine_fn_config_makefile programs/winebrowser enable_winebrowser

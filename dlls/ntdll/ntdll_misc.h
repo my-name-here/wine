@@ -20,9 +20,7 @@
 #define __WINE_NTDLL_MISC_H
 
 #include <stdarg.h>
-#include <signal.h>
 #include <sys/types.h>
-#include <pthread.h>
 
 #include "windef.h"
 #include "winnt.h"
@@ -129,7 +127,6 @@ struct ntdll_thread_data
     int                reply_fd;      /* fd for receiving server replies */
     int                wait_fd[2];    /* fd for sleeping server requests */
     BOOL               wow64_redir;   /* Wow64 filesystem redirection flag */
-    pthread_t          pthread_id;    /* pthread thread id */
 };
 
 C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
@@ -149,71 +146,6 @@ void     WINAPI LdrInitializeThunk(CONTEXT*,void**,ULONG_PTR,ULONG_PTR);
 #ifndef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
 #define InterlockedCompareExchange64(dest,xchg,cmp) RtlInterlockedCompareExchange64(dest,xchg,cmp)
 #endif
-
-/* string functions */
-void * __cdecl NTDLL_memchr( const void *ptr, int c, size_t n );
-char * __cdecl NTDLL_strcat( char *dst, const char *src );
-char * __cdecl NTDLL_strchr( const char *str, int c );
-int    __cdecl NTDLL_strcmp( const char *str1, const char *str2 );
-char * __cdecl NTDLL_strcpy( char *dst, const char *src );
-size_t __cdecl NTDLL_strlen( const char *str );
-char * __cdecl NTDLL_strrchr( const char *str, int c );
-LONG   __cdecl NTDLL_strtol( const char *s, char **end, int base );
-ULONG  __cdecl NTDLL_strtoul( const char *s, char **end, int base );
-int    __cdecl NTDLL_atoi( const char *nptr );
-int    __cdecl NTDLL_tolower( int c );
-int    __cdecl _stricmp( LPCSTR str1, LPCSTR str2 );
-int    __cdecl NTDLL__wcsicmp( LPCWSTR str1, LPCWSTR str2 );
-int    __cdecl NTDLL__wcsnicmp( LPCWSTR str1, LPCWSTR str2, size_t n );
-int    __cdecl NTDLL_wcscmp( LPCWSTR str1, LPCWSTR str2 );
-int    __cdecl NTDLL_wcsncmp( LPCWSTR str1, LPCWSTR str2, size_t n );
-WCHAR  __cdecl NTDLL_towlower( WCHAR ch );
-WCHAR  __cdecl NTDLL_towupper( WCHAR ch );
-LPWSTR __cdecl NTDLL__wcslwr( LPWSTR str );
-LPWSTR __cdecl NTDLL__wcsupr( LPWSTR str );
-LPWSTR __cdecl NTDLL_wcscpy( LPWSTR dst, LPCWSTR src );
-LPWSTR __cdecl NTDLL_wcscat( LPWSTR dst, LPCWSTR src );
-LPWSTR __cdecl NTDLL_wcschr( LPCWSTR str, WCHAR ch );
-size_t __cdecl NTDLL_wcslen( LPCWSTR str );
-size_t __cdecl NTDLL_wcscspn( LPCWSTR str, LPCWSTR reject );
-LPWSTR __cdecl NTDLL_wcsncat( LPWSTR s1, LPCWSTR s2, size_t n );
-LPWSTR __cdecl NTDLL_wcsncpy( LPWSTR s1, LPCWSTR s2, size_t n );
-LPWSTR __cdecl NTDLL_wcspbrk( LPCWSTR str, LPCWSTR accept );
-LPWSTR __cdecl NTDLL_wcsrchr( LPCWSTR str, WCHAR ch );
-size_t __cdecl NTDLL_wcsspn( LPCWSTR str, LPCWSTR accept );
-LPWSTR __cdecl NTDLL_wcsstr( LPCWSTR str, LPCWSTR sub );
-LPWSTR __cdecl NTDLL_wcstok( LPWSTR str, LPCWSTR delim );
-LONG   __cdecl NTDLL_wcstol( LPCWSTR s, LPWSTR *end, INT base );
-ULONG  __cdecl NTDLL_wcstoul( LPCWSTR s, LPWSTR *end, INT base );
-int    WINAPIV NTDLL_swprintf( WCHAR *str, const WCHAR *format, ... );
-int    WINAPIV _snwprintf_s( WCHAR *str, SIZE_T size, SIZE_T len, const WCHAR *format, ... );
-
-#define memchr(p,c,n) NTDLL_memchr(p,c,n)
-#define strcat(d,s) NTDLL_strcat(d,s)
-#define strchr(s,c) NTDLL_strchr(s,c)
-#define strcmp(s1,s2) NTDLL_strcmp(s1,s2)
-#define strcpy(d,s) NTDLL_strcpy(d,s)
-#define strlen(s) NTDLL_strlen(s)
-#define strrchr(s,c) NTDLL_strrchr(s,c)
-#define strtol(s,e,b) NTDLL_strtol(s,e,b)
-#define strtoul(s,e,b) NTDLL_strtoul(s,e,b)
-#define atoi(s) NTDLL_atoi(s)
-#define wcsicmp(s1,s2) NTDLL__wcsicmp(s1,s2)
-#define wcsnicmp(s1,s2,n) NTDLL__wcsnicmp(s1,s2,n)
-#define towupper(c) NTDLL_towupper(c)
-#define wcslwr(s) NTDLL__wcslwr(s)
-#define wcsupr(s) NTDLL__wcsupr(s)
-#define wcscpy(d,s) NTDLL_wcscpy(d,s)
-#define wcscat(d,s) NTDLL_wcscat(d,s)
-#define wcschr(s,c) NTDLL_wcschr(s,c)
-#define wcspbrk(s,a) NTDLL_wcspbrk(s,a)
-#define wcsrchr(s,c) NTDLL_wcsrchr(s,c)
-#define wcstoul(s,e,b) NTDLL_wcstoul(s,e,b)
-#define wcslen(s) NTDLL_wcslen(s)
-#define wcscspn(s,r) NTDLL_wcscspn(s,r)
-#define wcsspn(s,a) NTDLL_wcsspn(s,a)
-#define wcscmp(s1,s2) NTDLL_wcscmp(s1,s2)
-#define wcsncmp(s1,s2,n) NTDLL_wcsncmp(s1,s2,n)
 
 /* convert from straight ASCII to Unicode without depending on the current codepage */
 static inline void ascii_to_unicode( WCHAR *dst, const char *src, size_t len )

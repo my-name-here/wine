@@ -342,7 +342,7 @@ static void test_query_process(void)
         ULONG HandleCount;
         DWORD dwUnknown3;
         DWORD dwUnknown4;
-        VM_COUNTERS vmCounters;
+        VM_COUNTERS_EX vmCounters;
         IO_COUNTERS ioCounters;
         SYSTEM_THREAD_INFORMATION ti[1];
     } SYSTEM_PROCESS_INFORMATION_PRIVATE;
@@ -1399,7 +1399,7 @@ static void test_query_process_basic(void)
     ok( pbi.UniqueProcessId > 0, "Expected a ProcessID > 0, got 0\n");
 }
 
-static void dump_vm_counters(const char *header, const VM_COUNTERS *pvi)
+static void dump_vm_counters(const char *header, const VM_COUNTERS_EX *pvi)
 {
     trace("%s:\n", header);
     trace("PeakVirtualSize           : %lu\n", pvi->PeakVirtualSize);
@@ -1419,8 +1419,7 @@ static void test_query_process_vm(void)
 {
     NTSTATUS status;
     ULONG ReturnLength;
-    VM_COUNTERS pvi;
-    ULONG old_size = FIELD_OFFSET(VM_COUNTERS,PrivatePageCount);
+    VM_COUNTERS_EX pvi;
     HANDLE process;
     SIZE_T prev_size;
     const SIZE_T alloc_size = 16 * 1024 * 1024;
@@ -1430,24 +1429,19 @@ static void test_query_process_vm(void)
     ok( status == STATUS_ACCESS_VIOLATION || status == STATUS_INVALID_HANDLE,
         "Expected STATUS_ACCESS_VIOLATION or STATUS_INVALID_HANDLE(W2K3), got %08x\n", status);
 
-    status = pNtQueryInformationProcess(NULL, ProcessVmCounters, &pvi, old_size, NULL);
+    status = pNtQueryInformationProcess(NULL, ProcessVmCounters, &pvi, sizeof(VM_COUNTERS), NULL);
     ok( status == STATUS_INVALID_HANDLE, "Expected STATUS_INVALID_HANDLE, got %08x\n", status);
-
-    /* Windows XP and W2K3 will report success for a size of 44 AND 48 !
-       Windows W2K will only report success for 44.
-       For now we only care for 44, which is FIELD_OFFSET(VM_COUNTERS,PrivatePageCount))
-    */
 
     status = pNtQueryInformationProcess( GetCurrentProcess(), ProcessVmCounters, &pvi, 24, &ReturnLength);
     ok( status == STATUS_INFO_LENGTH_MISMATCH, "Expected STATUS_INFO_LENGTH_MISMATCH, got %08x\n", status);
 
-    status = pNtQueryInformationProcess( GetCurrentProcess(), ProcessVmCounters, &pvi, old_size, &ReturnLength);
+    status = pNtQueryInformationProcess( GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(VM_COUNTERS), &ReturnLength);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
-    ok( old_size == ReturnLength, "Inconsistent length %d\n", ReturnLength);
+    ok( ReturnLength == sizeof(VM_COUNTERS), "Inconsistent length %d\n", ReturnLength);
 
     status = pNtQueryInformationProcess( GetCurrentProcess(), ProcessVmCounters, &pvi, 46, &ReturnLength);
     ok( status == STATUS_INFO_LENGTH_MISMATCH, "Expected STATUS_INFO_LENGTH_MISMATCH, got %08x\n", status);
-    ok( ReturnLength == old_size || ReturnLength == sizeof(pvi), "Inconsistent length %d\n", ReturnLength);
+    ok( ReturnLength == sizeof(VM_COUNTERS) || ReturnLength == sizeof(pvi), "Inconsistent length %d\n", ReturnLength);
 
     /* Check if we have some return values */
     dump_vm_counters("VM counters for GetCurrentProcess", &pvi);
@@ -1468,6 +1462,7 @@ static void test_query_process_vm(void)
     process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, GetCurrentProcessId());
     status = pNtQueryInformationProcess(process, ProcessVmCounters, &pvi, sizeof(pvi), NULL);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok( pvi.PrivateUsage == pvi.PagefileUsage, "wrong value %lu/%lu\n", pvi.PrivateUsage, pvi.PagefileUsage );
 
     /* Check if we have some return values */
     dump_vm_counters("VM counters for GetCurrentProcessId", &pvi);
@@ -1479,6 +1474,7 @@ static void test_query_process_vm(void)
     /* Check if we have real counters */
     status = pNtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok( pvi.PrivateUsage == pvi.PagefileUsage, "wrong value %lu/%lu\n", pvi.PrivateUsage, pvi.PagefileUsage );
     prev_size = pvi.VirtualSize;
     if (winetest_debug > 1)
         dump_vm_counters("VM counters before VirtualAlloc", &pvi);
@@ -1486,6 +1482,7 @@ static void test_query_process_vm(void)
     ok( ptr != NULL, "VirtualAlloc failed, err %u\n", GetLastError());
     status = pNtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok( pvi.PrivateUsage == pvi.PagefileUsage, "wrong value %lu/%lu\n", pvi.PrivateUsage, pvi.PagefileUsage );
     if (winetest_debug > 1)
         dump_vm_counters("VM counters after VirtualAlloc", &pvi);
     todo_wine ok( pvi.VirtualSize >= prev_size + alloc_size,
@@ -1494,6 +1491,7 @@ static void test_query_process_vm(void)
 
     status = pNtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok( pvi.PrivateUsage == pvi.PagefileUsage, "wrong value %lu/%lu\n", pvi.PrivateUsage, pvi.PagefileUsage );
     prev_size = pvi.VirtualSize;
     if (winetest_debug > 1)
         dump_vm_counters("VM counters before VirtualAlloc", &pvi);
@@ -1501,6 +1499,7 @@ static void test_query_process_vm(void)
     ok( ptr != NULL, "VirtualAlloc failed, err %u\n", GetLastError());
     status = pNtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok( pvi.PrivateUsage == pvi.PagefileUsage, "wrong value %lu/%lu\n", pvi.PrivateUsage, pvi.PagefileUsage );
     if (winetest_debug > 1)
         dump_vm_counters("VM counters after VirtualAlloc(MEM_RESERVE)", &pvi);
     todo_wine ok( pvi.VirtualSize >= prev_size + alloc_size,
@@ -1511,6 +1510,7 @@ static void test_query_process_vm(void)
     ok( ptr != NULL, "VirtualAlloc failed, err %u\n", GetLastError());
     status = pNtQueryInformationProcess(GetCurrentProcess(), ProcessVmCounters, &pvi, sizeof(pvi), NULL);
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok( pvi.PrivateUsage == pvi.PagefileUsage, "wrong value %lu/%lu\n", pvi.PrivateUsage, pvi.PagefileUsage );
     if (winetest_debug > 1)
         dump_vm_counters("VM counters after VirtualAlloc(MEM_COMMIT)", &pvi);
     ok( pvi.VirtualSize == prev_size,
@@ -2346,7 +2346,6 @@ static void test_affinity(void)
     DWORD_PTR proc_affinity, thread_affinity;
     THREAD_BASIC_INFORMATION tbi;
     SYSTEM_INFO si;
-    ULONG dummy;
 
     GetSystemInfo(&si);
     status = pNtQueryInformationProcess( GetCurrentProcess(), ProcessBasicInformation, &pbi, sizeof(pbi), NULL );
@@ -2451,6 +2450,20 @@ static void test_affinity(void)
     ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status);
     ok( tbi.AffinityMask == (1 << si.dwNumberOfProcessors) - 1,
         "Unexpected thread affinity\n" );
+}
+
+static DWORD WINAPI hide_from_debugger_thread(void *arg)
+{
+    HANDLE stop_event = arg;
+    WaitForSingleObject( stop_event, INFINITE );
+    return 0;
+}
+
+static void test_HideFromDebugger(void)
+{
+    NTSTATUS status;
+    HANDLE thread, stop_event;
+    ULONG dummy;
 
     dummy = 0;
     status = pNtSetInformationThread( GetCurrentThread(), ThreadHideFromDebugger, &dummy, sizeof(ULONG) );
@@ -2477,6 +2490,31 @@ static void test_affinity(void)
         ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status );
         if (status == STATUS_SUCCESS) ok( dummy == 1, "Expected dummy == 1, got %08x\n", dummy );
     }
+
+    stop_event = CreateEventA( NULL, FALSE, FALSE, NULL );
+    ok( stop_event != NULL, "CreateEvent failed\n" );
+    thread = CreateThread( NULL, 0, hide_from_debugger_thread, stop_event, 0, NULL );
+    ok( thread != INVALID_HANDLE_VALUE, "CreateThread failed with %d\n", GetLastError() );
+
+    dummy = 0;
+    status = NtQueryInformationThread( thread, ThreadHideFromDebugger, &dummy, 1, NULL );
+    ok( status == STATUS_SUCCESS || status == STATUS_INVALID_INFO_CLASS,
+        "Expected STATUS_SUCCESS, got %08x\n", status );
+    if (status == STATUS_SUCCESS) ok( dummy == 0, "Expected dummy == 0, got %08x\n", dummy );
+
+    status = pNtSetInformationThread( thread, ThreadHideFromDebugger, NULL, 0 );
+    ok( status == STATUS_SUCCESS, "Expected STATUS_SUCCESS, got %08x\n", status );
+
+    dummy = 0;
+    status = NtQueryInformationThread( thread, ThreadHideFromDebugger, &dummy, 1, NULL );
+    ok( status == STATUS_SUCCESS || status == STATUS_INVALID_INFO_CLASS,
+        "Expected STATUS_SUCCESS, got %08x\n", status );
+    if (status == STATUS_SUCCESS) ok( dummy == 1, "Expected dummy == 1, got %08x\n", dummy );
+
+    SetEvent( stop_event );
+    WaitForSingleObject( thread, INFINITE );
+    CloseHandle( thread );
+    CloseHandle( stop_event );
 }
 
 static void test_NtGetCurrentProcessorNumber(void)
@@ -2846,6 +2884,9 @@ START_TEST(info)
 
     trace("Starting test_affinity()\n");
     test_affinity();
+
+    trace("Starting test_HideFromDebugger()\n");
+    test_HideFromDebugger();
 
     trace("Starting test_NtGetCurrentProcessorNumber()\n");
     test_NtGetCurrentProcessorNumber();

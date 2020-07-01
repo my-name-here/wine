@@ -1005,7 +1005,7 @@ struct get_thread_info_request
 {
     struct request_header __header;
     obj_handle_t handle;
-    thread_id_t  tid_in;
+    unsigned int access;
     char __pad_20[4];
 };
 struct get_thread_info_reply
@@ -1020,9 +1020,9 @@ struct get_thread_info_reply
     int          priority;
     int          last;
     int          suspend_count;
+    int          dbg_hidden;
     data_size_t  desc_len;
     /* VARARG(desc,unicode_str); */
-    char __pad_60[4];
 };
 
 
@@ -1064,6 +1064,7 @@ struct set_thread_info_reply
 #define SET_THREAD_INFO_TOKEN       0x04
 #define SET_THREAD_INFO_ENTRYPOINT  0x08
 #define SET_THREAD_INFO_DESCRIPTION 0x10
+#define SET_THREAD_INFO_DBG_HIDDEN  0x20
 
 
 
@@ -5643,6 +5644,22 @@ struct set_cursor_reply
 
 
 
+struct get_rawinput_buffer_request
+{
+    struct request_header __header;
+    data_size_t rawinput_size;
+    data_size_t buffer_size;
+    char __pad_20[4];
+};
+struct get_rawinput_buffer_reply
+{
+    struct reply_header __header;
+    data_size_t next_size;
+    unsigned int count;
+    /* VARARG(data,bytes); */
+};
+
+
 struct update_rawinput_devices_request
 {
     struct request_header __header;
@@ -6083,6 +6100,7 @@ enum request
     REQ_alloc_user_handle,
     REQ_free_user_handle,
     REQ_set_cursor,
+    REQ_get_rawinput_buffer,
     REQ_update_rawinput_devices,
     REQ_create_job,
     REQ_open_job,
@@ -6386,6 +6404,7 @@ union generic_request
     struct alloc_user_handle_request alloc_user_handle_request;
     struct free_user_handle_request free_user_handle_request;
     struct set_cursor_request set_cursor_request;
+    struct get_rawinput_buffer_request get_rawinput_buffer_request;
     struct update_rawinput_devices_request update_rawinput_devices_request;
     struct create_job_request create_job_request;
     struct open_job_request open_job_request;
@@ -6687,6 +6706,7 @@ union generic_reply
     struct alloc_user_handle_reply alloc_user_handle_reply;
     struct free_user_handle_reply free_user_handle_reply;
     struct set_cursor_reply set_cursor_reply;
+    struct get_rawinput_buffer_reply get_rawinput_buffer_reply;
     struct update_rawinput_devices_reply update_rawinput_devices_reply;
     struct create_job_reply create_job_reply;
     struct open_job_reply open_job_reply;
@@ -6702,7 +6722,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 611
+#define SERVER_PROTOCOL_VERSION 613
 
 /* ### protocol_version end ### */
 

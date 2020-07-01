@@ -149,7 +149,7 @@ static inline struct arm64_thread_data *arm64_thread_data(void)
 NTSTATUS CDECL unwind_builtin_dll( ULONG type, DISPATCHER_CONTEXT *dispatch, CONTEXT *context )
 {
 #ifdef HAVE_LIBUNWIND
-    ULONG_PTR ip = context->Rip;
+    ULONG_PTR ip = context->Pc;
     unw_context_t unw_context;
     unw_cursor_t cursor;
     unw_proc_info_t info;
@@ -600,6 +600,11 @@ static void setup_raise_exception( ucontext_t *sigcontext, struct stack_layout *
     REGn_sig(1, sigcontext) = (ULONG_PTR)&stack->context; /* second arg for raise_generic_exception */
     REGn_sig(2, sigcontext) = (ULONG_PTR)pKiUserExceptionDispatcher; /* third arg for raise_func_trampoline */
     REGn_sig(18, sigcontext) = (ULONG_PTR)NtCurrentTeb();
+}
+
+void WINAPI call_user_exception_dispatcher( EXCEPTION_RECORD *rec, CONTEXT *context )
+{
+    pKiUserExceptionDispatcher( rec, context );
 }
 
 /**********************************************************************
