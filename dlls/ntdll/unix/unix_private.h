@@ -21,6 +21,7 @@
 #ifndef __NTDLL_UNIX_PRIVATE_H
 #define __NTDLL_UNIX_PRIVATE_H
 
+#include <pthread.h>
 #include "unixlib.h"
 #include "wine/list.h"
 
@@ -156,14 +157,13 @@ extern void init_environment( int argc, char *argv[], char *envp[] ) DECLSPEC_HI
 extern DWORD ntdll_umbstowcs( const char *src, DWORD srclen, WCHAR *dst, DWORD dstlen ) DECLSPEC_HIDDEN;
 extern int ntdll_wcstoumbs( const WCHAR *src, DWORD srclen, char *dst, DWORD dstlen, BOOL strict ) DECLSPEC_HIDDEN;
 extern char **build_envp( const WCHAR *envW ) DECLSPEC_HIDDEN;
-extern NTSTATUS exec_wineloader( char **argv, int socketfd, int is_child_64bit,
-                                 ULONGLONG res_start, ULONGLONG res_end ) DECLSPEC_HIDDEN;
+extern NTSTATUS exec_wineloader( char **argv, int socketfd, const pe_image_info_t *pe_info ) DECLSPEC_HIDDEN;
 extern void start_server( BOOL debug ) DECLSPEC_HIDDEN;
 extern ULONG_PTR get_image_address(void) DECLSPEC_HIDDEN;
 
 extern unsigned int server_call_unlocked( void *req_ptr ) DECLSPEC_HIDDEN;
-extern void server_enter_uninterrupted_section( RTL_CRITICAL_SECTION *cs, sigset_t *sigset ) DECLSPEC_HIDDEN;
-extern void server_leave_uninterrupted_section( RTL_CRITICAL_SECTION *cs, sigset_t *sigset ) DECLSPEC_HIDDEN;
+extern void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset ) DECLSPEC_HIDDEN;
+extern void server_leave_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset ) DECLSPEC_HIDDEN;
 extern unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT flags,
                                    timeout_t abs_timeout, CONTEXT *context, RTL_CRITICAL_SECTION *cs,
                                    user_apc_t *user_apc ) DECLSPEC_HIDDEN;
