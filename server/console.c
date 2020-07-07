@@ -38,6 +38,7 @@
 #include "unicode.h"
 #include "wincon.h"
 #include "winternl.h"
+#include "wine/condrv.h"
 
 struct screen_buffer;
 struct console_input_events;
@@ -70,6 +71,7 @@ struct console_input
     user_handle_t                win;           /* window handle if backend supports it */
     struct event                *event;         /* event to wait on for input queue */
     struct fd                   *fd;            /* for bare console, attached input fd */
+    struct async_queue           read_q;        /* read queue */
 };
 
 static void console_input_dump( struct object *obj, int verbose );
@@ -200,6 +202,7 @@ static const struct object_ops screen_buffer_ops =
 };
 
 static enum server_fd_type console_get_fd_type( struct fd *fd );
+static int console_ioctl( struct fd *fd, ioctl_code_t code, struct async *async );
 
 static const struct fd_ops console_fd_ops =
 {
@@ -211,7 +214,7 @@ static const struct fd_ops console_fd_ops =
     no_fd_flush,                  /* flush */
     no_fd_get_file_info,          /* get_file_info */
     no_fd_get_volume_info,        /* get_volume_info */
-    default_fd_ioctl,             /* ioctl */
+    console_ioctl,                /* ioctl */
     default_fd_queue_async,       /* queue_async */
     default_fd_reselect_async     /* reselect_async */
 };
@@ -258,10 +261,7 @@ static struct fd *console_input_get_fd( struct object* obj )
 {
     struct console_input *console_input = (struct console_input*)obj;
     assert( obj->ops == &console_input_ops );
-    if (console_input->fd)
-        return (struct fd*)grab_object( console_input->fd );
-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
-    return NULL;
+    return (struct fd *)grab_object( console_input->fd );
 }
 
 static enum server_fd_type console_get_fd_type( struct fd *fd )
@@ -390,6 +390,7 @@ static struct object *create_console_input( struct thread* renderer, int fd )
     console_input->win           = 0;
     console_input->event         = create_event( NULL, NULL, 0, 1, 0, NULL );
     console_input->fd            = NULL;
+    init_async_queue( &console_input->read_q );
 
     if (!console_input->history || (renderer && !console_input->evt) || !console_input->event)
     {
@@ -400,15 +401,20 @@ static struct object *create_console_input( struct thread* renderer, int fd )
     }
     if (fd != -1) /* bare console */
     {
-        if (!(console_input->fd = create_anonymous_fd( &console_fd_ops, fd, &console_input->obj,
-                                                       FILE_SYNCHRONOUS_IO_NONALERT )))
-        {
-            release_object( console_input );
-            return NULL;
-        }
-        allow_fd_caching( console_input->fd );
+        console_input->fd = create_anonymous_fd( &console_fd_ops, fd, &console_input->obj,
+                                                 FILE_SYNCHRONOUS_IO_NONALERT );
     }
-
+    else
+    {
+        console_input->fd = alloc_pseudo_fd( &console_fd_ops, &console_input->obj,
+                                             FILE_SYNCHRONOUS_IO_NONALERT );
+    }
+    if (!console_input->fd)
+    {
+        release_object( console_input );
+        return NULL;
+    }
+    allow_fd_caching( console_input->fd );
     return &console_input->obj;
 }
 
@@ -693,11 +699,61 @@ static int set_console_mode( obj_handle_t handle, int mode )
     return ret;
 }
 
+/* retrieve a pointer to the console input records */
+static int read_console_input( struct console_input *console, struct async *async, int flush )
+{
+    struct iosb *iosb = async_get_iosb( async );
+    data_size_t count;
+
+    count = min( iosb->out_size / sizeof(INPUT_RECORD), console->recnum );
+    if (count)
+    {
+        if (!(iosb->out_data = malloc( count * sizeof(INPUT_RECORD) )))
+        {
+            set_error( STATUS_NO_MEMORY );
+            release_object( iosb );
+            return 0;
+        }
+        iosb->out_size = iosb->result = count * sizeof(INPUT_RECORD);
+        memcpy( iosb->out_data, console->records, iosb->result );
+        iosb->status = STATUS_SUCCESS;
+        async_terminate( async, STATUS_ALERTED );
+    }
+    else
+    {
+        async_terminate( async, STATUS_SUCCESS );
+    }
+
+    release_object( iosb );
+
+    if (flush && count)
+    {
+        if (console->recnum > count)
+        {
+            INPUT_RECORD *new_rec;
+            memmove( console->records, console->records + count, (console->recnum - count) * sizeof(*console->records) );
+            console->recnum -= count;
+            new_rec = realloc( console->records, console->recnum * sizeof(*console->records) );
+            if (new_rec) console->records = new_rec;
+        }
+        else
+        {
+            console->recnum = 0;
+            free( console->records );
+            console->records = NULL;
+            reset_event( console->event );
+        }
+    }
+
+    return 1;
+}
+
 /* add input events to a console input queue */
 static int write_console_input( struct console_input* console, int count,
                                 const INPUT_RECORD *records )
 {
     INPUT_RECORD *new_rec;
+    struct async *async;
 
     if (!count) return 0;
     if (!(new_rec = realloc( console->records,
@@ -732,50 +788,13 @@ static int write_console_input( struct console_input* console, int count,
             else i++;
         }
     }
-    if (!console->recnum && count) set_event( console->event );
     console->recnum += count;
-    return count;
-}
-
-/* retrieve a pointer to the console input records */
-static int read_console_input( obj_handle_t handle, int count, int flush )
-{
-    struct console_input *console;
-
-    if (!(console = (struct console_input *)get_handle_obj( current->process, handle,
-                                                            FILE_READ_DATA, &console_input_ops )))
-        return -1;
-
-    if (!count)
+    while (console->recnum && (async = find_pending_async( &console->read_q )))
     {
-        /* special case: do not retrieve anything, but return
-         * the total number of records available */
-        count = console->recnum;
+        read_console_input( console, async, 1 );
+        release_object( async );
     }
-    else
-    {
-        if (count > console->recnum) count = console->recnum;
-        set_reply_data( console->records, count * sizeof(INPUT_RECORD) );
-    }
-    if (flush)
-    {
-        int i;
-        for (i = count; i < console->recnum; i++)
-            console->records[i-count] = console->records[i];
-        if ((console->recnum -= count) > 0)
-        {
-            INPUT_RECORD *new_rec = realloc( console->records,
-                                             console->recnum * sizeof(INPUT_RECORD) );
-            if (new_rec) console->records = new_rec;
-        }
-        else
-        {
-            free( console->records );
-            console->records = NULL;
-            reset_event( console->event );
-        }
-    }
-    release_object( console );
+    if (console->recnum) set_event( console->event );
     return count;
 }
 
@@ -1193,6 +1212,7 @@ static void console_input_destroy( struct object *obj )
         if (curr->input == console_in) curr->input = NULL;
     }
 
+    free_async_queue( &console_in->read_q );
     if (console_in->evt)
     {
         release_object( console_in->evt );
@@ -1485,6 +1505,65 @@ static void scroll_console_output( struct screen_buffer *screen_buffer, int xsrc
     console_input_events_append( screen_buffer->input, &evt );
 }
 
+static int console_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+{
+    struct console_input *console = get_fd_user( fd );
+
+    switch (code)
+    {
+    case IOCTL_CONDRV_READ_INPUT:
+        {
+            int blocking = 0;
+            if (get_reply_max_size() % sizeof(INPUT_RECORD))
+            {
+                set_error( STATUS_INVALID_PARAMETER );
+                return 0;
+            }
+            if (get_req_data_size())
+            {
+                if (get_req_data_size() != sizeof(int))
+                {
+                    set_error( STATUS_INVALID_PARAMETER );
+                    return 0;
+                }
+                blocking = *(int *)get_req_data();
+            }
+            set_error( STATUS_PENDING );
+            if (blocking && !console->recnum)
+            {
+                queue_async( &console->read_q, async );
+                return 1;
+            }
+            return read_console_input( console, async, 1 );
+        }
+
+    case IOCTL_CONDRV_PEEK:
+        if (get_reply_max_size() % sizeof(INPUT_RECORD))
+        {
+            set_error( STATUS_INVALID_PARAMETER );
+            return 0;
+        }
+        set_error( STATUS_PENDING );
+        return read_console_input( console, async, 0 );
+
+    case IOCTL_CONDRV_GET_INPUT_INFO:
+        {
+            struct condrv_input_info info;
+            if (get_reply_max_size() != sizeof(info))
+            {
+                set_error( STATUS_INVALID_PARAMETER );
+                return 0;
+            }
+            info.input_count = console->recnum;
+            return set_reply_data( &info, sizeof(info) ) != NULL;
+        }
+
+    default:
+        set_error( STATUS_INVALID_HANDLE );
+        return 0;
+    }
+}
+
 static struct object_type *console_device_get_type( struct object *obj )
 {
     static const WCHAR name[] = {'D','e','v','i','c','e'};
@@ -1772,13 +1851,6 @@ DECL_HANDLER(write_console_input)
     reply->written = write_console_input( console, get_req_data_size() / sizeof(INPUT_RECORD),
                                           get_req_data() );
     release_object( console );
-}
-
-/* fetch input records from a console input queue */
-DECL_HANDLER(read_console_input)
-{
-    int count = get_reply_max_size() / sizeof(INPUT_RECORD);
-    reply->read = read_console_input( req->handle, count, req->flush );
 }
 
 /* appends a string to console's history */

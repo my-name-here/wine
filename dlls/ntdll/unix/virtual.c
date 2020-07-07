@@ -286,7 +286,7 @@ static void reserve_area( void *addr, void *end )
 
 static void mmap_init( const struct preload_info *preload_info )
 {
-#ifdef __i386__
+#ifndef _WIN64
 #ifndef __APPLE__
     char stack;
     char * const stack_ptr = &stack;
@@ -329,7 +329,7 @@ static void mmap_init( const struct preload_info *preload_info )
 #endif
         reserve_area( user_space_limit, 0 );
 
-#elif defined(__x86_64__) || defined(__aarch64__)
+#else
 
     if (preload_info) return;
     /* if we don't have a preloader, try to reserve the space now */
@@ -2538,6 +2538,7 @@ NTSTATUS virtual_create_builtin_view( void *module )
             set_page_vprot( (char *)base + sec[i].VirtualAddress, sec[i].Misc.VirtualSize, flags );
         }
         VIRTUAL_DEBUG_DUMP_VIEW( view );
+        if (is_beyond_limit( base, size, working_set_limit )) working_set_limit = address_space_limit;
     }
     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
     return status;
