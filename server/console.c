@@ -79,6 +79,7 @@ static void console_input_destroy( struct object *obj );
 static struct fd *console_input_get_fd( struct object *obj );
 static struct object *console_input_open_file( struct object *obj, unsigned int access,
                                                unsigned int sharing, unsigned int options );
+static enum server_fd_type console_get_fd_type( struct fd *fd );
 
 static const struct object_ops console_input_ops =
 {
@@ -105,14 +106,16 @@ static const struct object_ops console_input_ops =
 
 static void console_input_events_dump( struct object *obj, int verbose );
 static void console_input_events_destroy( struct object *obj );
-static int console_input_events_signaled( struct object *obj, struct wait_queue_entry *entry );
+static struct fd *console_input_events_get_fd( struct object *obj );
 
 struct console_input_events
 {
-    struct object         obj;         /* object header */
-    int			  num_alloc;   /* number of allocated events */
-    int 		  num_used;    /* number of actually used events */
-    struct console_renderer_event*	events;
+    struct object                  obj;         /* object header */
+    struct fd                     *fd;          /* pseudo-fd for ioctls */
+    int                            num_alloc;   /* number of allocated events */
+    int                            num_used;    /* number of actually used events */
+    struct condrv_renderer_event  *events;
+    struct async_queue             read_q;      /* read queue */
 };
 
 static const struct object_ops console_input_events_ops =
@@ -122,10 +125,10 @@ static const struct object_ops console_input_events_ops =
     no_get_type,                      /* get_type */
     add_queue,                        /* add_queue */
     remove_queue,                     /* remove_queue */
-    console_input_events_signaled,    /* signaled */
+    NULL,                             /* signaled */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
-    no_get_fd,                        /* get_fd */
+    console_input_events_get_fd,      /* get_fd */
     default_fd_map_access,            /* map_access */
     default_get_sd,                   /* get_sd */
     default_set_sd,                   /* set_sd */
@@ -136,6 +139,23 @@ static const struct object_ops console_input_events_ops =
     no_kernel_obj_list,               /* get_kernel_obj_list */
     no_close_handle,                  /* close_handle */
     console_input_events_destroy      /* destroy */
+};
+
+static int console_input_events_ioctl( struct fd *fd, ioctl_code_t code, struct async *async );
+
+static const struct fd_ops console_input_events_fd_ops =
+{
+    default_fd_get_poll_events,   /* get_poll_events */
+    default_poll_event,           /* poll_event */
+    console_get_fd_type,          /* get_fd_type */
+    no_fd_read,                   /* read */
+    no_fd_write,                  /* write */
+    no_fd_flush,                  /* flush */
+    no_fd_get_file_info,          /* get_file_info */
+    no_fd_get_volume_info,        /* get_volume_info */
+    console_input_events_ioctl,   /* ioctl */
+    default_fd_queue_async,       /* queue_async */
+    default_fd_reselect_async     /* reselect_async */
 };
 
 struct font_info
@@ -201,7 +221,6 @@ static const struct object_ops screen_buffer_ops =
     screen_buffer_destroy             /* destroy */
 };
 
-static enum server_fd_type console_get_fd_type( struct fd *fd );
 static int console_ioctl( struct fd *fd, ioctl_code_t code, struct async *async );
 
 static const struct fd_ops console_fd_ops =
@@ -283,23 +302,54 @@ static void console_input_events_destroy( struct object *obj )
 {
     struct console_input_events *evts = (struct console_input_events *)obj;
     assert( obj->ops == &console_input_events_ops );
+    free_async_queue( &evts->read_q );
+    if (evts->fd) release_object( evts->fd );
     free( evts->events );
 }
 
-/* the renderer events list is signaled when it's not empty */
-static int console_input_events_signaled( struct object *obj, struct wait_queue_entry *entry )
+static struct fd *console_input_events_get_fd( struct object* obj )
 {
-    struct console_input_events *evts = (struct console_input_events *)obj;
+    struct console_input_events *evts = (struct console_input_events*)obj;
     assert( obj->ops == &console_input_events_ops );
-    return (evts->num_used != 0);
+    return (struct fd*)grab_object( evts->fd );
+}
+
+/* retrieves events from the console's renderer events list */
+static int get_renderer_events( struct console_input_events* evts, struct async *async )
+{
+    struct iosb *iosb = async_get_iosb( async );
+    data_size_t num;
+
+    num = min( iosb->out_size / sizeof(evts->events[0]), evts->num_used );
+    if (num && !(iosb->out_data = malloc( num * sizeof(evts->events[0] ))))
+    {
+        async_terminate( async, STATUS_NO_MEMORY );
+        release_object( iosb );
+        return 0;
+    }
+
+    iosb->status = STATUS_SUCCESS;
+    iosb->out_size = iosb->result = num * sizeof(evts->events[0]);
+    if (num) memcpy( iosb->out_data, evts->events, iosb->result );
+    release_object( iosb );
+    async_terminate( async, STATUS_ALERTED );
+
+    if (num && num < evts->num_used)
+    {
+        memmove( &evts->events[0], &evts->events[num],
+                 (evts->num_used - num) * sizeof(evts->events[0]) );
+    }
+    evts->num_used -= num;
+    return 1;
 }
 
 /* add an event to the console's renderer events list */
 static void console_input_events_append( struct console_input* console,
-					 struct console_renderer_event* evt)
+					 struct condrv_renderer_event* evt)
 {
     struct console_input_events* evts;
     int collapsed = FALSE;
+    struct async *async;
 
     if (!(evts = console->evt)) return;
     /* to be done even when evt has been generated by the renderer ? */
@@ -307,7 +357,7 @@ static void console_input_events_append( struct console_input* console,
     /* try to collapse evt into current queue's events */
     if (evts->num_used)
     {
-        struct console_renderer_event* last = &evts->events[evts->num_used - 1];
+        struct condrv_renderer_event* last = &evts->events[evts->num_used - 1];
 
         if (last->event == CONSOLE_RENDERER_UPDATE_EVENT &&
             evt->event == CONSOLE_RENDERER_UPDATE_EVENT)
@@ -332,22 +382,11 @@ static void console_input_events_append( struct console_input* console,
         }
         evts->events[evts->num_used++] = *evt;
     }
-    wake_up( &evts->obj, 0 );
-}
-
-/* retrieves events from the console's renderer events list */
-static void console_input_events_get( struct console_input_events* evts )
-{
-    data_size_t num = get_reply_max_size() / sizeof(evts->events[0]);
-
-    if (num > evts->num_used) num = evts->num_used;
-    set_reply_data( evts->events, num * sizeof(evts->events[0]) );
-    if (num < evts->num_used)
+    while (evts->num_used && (async = find_pending_async( &evts->read_q )))
     {
-        memmove( &evts->events[0], &evts->events[num],
-                 (evts->num_used - num) * sizeof(evts->events[0]) );
+        get_renderer_events( evts, async );
+        release_object( async );
     }
-    evts->num_used -= num;
 }
 
 static struct console_input_events *create_console_input_events(void)
@@ -357,6 +396,12 @@ static struct console_input_events *create_console_input_events(void)
     if (!(evt = alloc_object( &console_input_events_ops ))) return NULL;
     evt->num_alloc = evt->num_used = 0;
     evt->events = NULL;
+    init_async_queue( &evt->read_q );
+    if (!(evt->fd = alloc_pseudo_fd( &console_input_events_fd_ops, &evt->obj, 0 )))
+    {
+        release_object( evt );
+        return NULL;
+    }
     return evt;
 }
 
@@ -421,7 +466,7 @@ static struct object *create_console_input( struct thread* renderer, int fd )
 static void generate_sb_initial_events( struct console_input *console_input )
 {
     struct screen_buffer *screen_buffer = console_input->active;
-    struct console_renderer_event evt;
+    struct condrv_renderer_event evt;
 
     evt.event = CONSOLE_RENDERER_ACTIVE_SB_EVENT;
     memset(&evt.u, 0, sizeof(evt.u));
@@ -536,7 +581,7 @@ int free_console( struct process *process )
     if (--console->num_proc == 0 && console->renderer)
     {
 	/* all processes have terminated... tell the renderer to terminate too */
-	struct console_renderer_event evt;
+	struct condrv_renderer_event evt;
 	evt.event = CONSOLE_RENDERER_EXIT_EVENT;
         memset(&evt.u, 0, sizeof(evt.u));
 	console_input_events_append( console, &evt );
@@ -755,12 +800,12 @@ static int write_console_input( struct console_input* console, int count,
     INPUT_RECORD *new_rec;
     struct async *async;
 
-    if (!count) return 0;
+    if (!count) return 1;
     if (!(new_rec = realloc( console->records,
                              (console->recnum + count) * sizeof(INPUT_RECORD) )))
     {
         set_error( STATUS_NO_MEMORY );
-        return -1;
+        return 0;
     }
     console->records = new_rec;
     memcpy( new_rec + console->recnum, records, count * sizeof(INPUT_RECORD) );
@@ -795,7 +840,7 @@ static int write_console_input( struct console_input* console, int count,
         release_object( async );
     }
     if (console->recnum) set_event( console->event );
-    return count;
+    return 1;
 }
 
 /* set misc console input information */
@@ -803,7 +848,7 @@ static int set_console_input_info( const struct set_console_input_info_request *
 				   const WCHAR *title, data_size_t len )
 {
     struct console_input *console;
-    struct console_renderer_event evt;
+    struct condrv_renderer_event evt;
 
     if (!(console = console_input_get( req->handle, FILE_WRITE_PROPERTIES ))) goto error;
     if (console_input_is_bare(console) &&
@@ -960,7 +1005,7 @@ static int change_screen_buffer_size( struct screen_buffer *screen_buffer,
 static int set_console_output_info( struct screen_buffer *screen_buffer,
                                     const struct set_console_output_info_request *req )
 {
-    struct console_renderer_event evt;
+    struct condrv_renderer_event evt;
     data_size_t font_name_len, offset;
     WCHAR *font_name;
 
@@ -1337,7 +1382,7 @@ static int write_console_output( struct screen_buffer *screen_buffer, data_size_
 
     if (i && screen_buffer == screen_buffer->input->active)
     {
-        struct console_renderer_event evt;
+        struct condrv_renderer_event evt;
         evt.event = CONSOLE_RENDERER_UPDATE_EVENT;
         memset(&evt.u, 0, sizeof(evt.u));
         evt.u.update.top    = y + x / screen_buffer->width;
@@ -1388,7 +1433,7 @@ static int fill_console_output( struct screen_buffer *screen_buffer, char_info_t
 
     if (count && screen_buffer == screen_buffer->input->active)
     {
-        struct console_renderer_event evt;
+        struct condrv_renderer_event evt;
         evt.event = CONSOLE_RENDERER_UPDATE_EVENT;
         memset(&evt.u, 0, sizeof(evt.u));
         evt.u.update.top    = y;
@@ -1456,7 +1501,7 @@ static void scroll_console_output( struct screen_buffer *screen_buffer, int xsrc
 {
     int				j;
     char_info_t *psrc, *pdst;
-    struct console_renderer_event evt;
+    struct condrv_renderer_event evt;
 
     if (xsrc < 0 || ysrc < 0 || xdst < 0 || ydst < 0 ||
 	xsrc + w > screen_buffer->width  ||
@@ -1537,6 +1582,9 @@ static int console_ioctl( struct fd *fd, ioctl_code_t code, struct async *async 
             return read_console_input( console, async, 1 );
         }
 
+    case IOCTL_CONDRV_WRITE_INPUT:
+        return write_console_input( console, get_req_data_size() / sizeof(INPUT_RECORD), get_req_data() );
+
     case IOCTL_CONDRV_PEEK:
         if (get_reply_max_size() % sizeof(INPUT_RECORD))
         {
@@ -1554,9 +1602,30 @@ static int console_ioctl( struct fd *fd, ioctl_code_t code, struct async *async 
                 set_error( STATUS_INVALID_PARAMETER );
                 return 0;
             }
-            info.input_count = console->recnum;
+            info.history_mode  = console->history_mode;
+            info.history_size  = console->history_size;
+            info.edition_mode  = console->edition_mode;
+            info.input_count   = console->recnum;
             return set_reply_data( &info, sizeof(info) ) != NULL;
         }
+
+    default:
+        set_error( STATUS_INVALID_HANDLE );
+        return 0;
+    }
+}
+
+static int console_input_events_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+{
+    struct console_input_events *evts = get_fd_user( fd );
+
+    switch (code)
+    {
+    case IOCTL_CONDRV_GET_RENDERER_EVENTS:
+        set_error( STATUS_PENDING );
+        if (evts->num_used) return get_renderer_events( evts, async );
+        queue_async( &evts->read_q, async );
+        return 1;
 
     default:
         set_error( STATUS_INVALID_HANDLE );
@@ -1726,18 +1795,6 @@ DECL_HANDLER(free_console)
     free_console( current->process );
 }
 
-/* let the renderer peek the events it's waiting on */
-DECL_HANDLER(get_console_renderer_events)
-{
-    struct console_input_events *evt;
-
-    evt = (struct console_input_events *)get_handle_obj( current->process, req->handle,
-                                                         FILE_READ_PROPERTIES, &console_input_events_ops );
-    if (!evt) return;
-    console_input_events_get( evt );
-    release_object( evt );
-}
-
 /* open a handle to the process console */
 DECL_HANDLER(open_console)
 {
@@ -1837,20 +1894,6 @@ DECL_HANDLER(get_console_mode)
 DECL_HANDLER(set_console_mode)
 {
     set_console_mode( req->handle, req->mode );
-}
-
-/* add input records to a console input queue */
-DECL_HANDLER(write_console_input)
-{
-    struct console_input *console;
-
-    reply->written = 0;
-    if (!(console = (struct console_input *)get_handle_obj( current->process, req->handle,
-                                                            FILE_WRITE_PROPERTIES, &console_input_ops )))
-        return;
-    reply->written = write_console_input( console, get_req_data_size() / sizeof(INPUT_RECORD),
-                                          get_req_data() );
-    release_object( console );
 }
 
 /* appends a string to console's history */

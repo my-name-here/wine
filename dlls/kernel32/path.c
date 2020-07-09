@@ -229,68 +229,6 @@ BOOL WINAPI CreateDirectoryExA( LPCSTR template, LPCSTR path, LPSECURITY_ATTRIBU
 
 
 /***********************************************************************
- *           RemoveDirectoryW   (KERNEL32.@)
- */
-BOOL WINAPI RemoveDirectoryW( LPCWSTR path )
-{
-    OBJECT_ATTRIBUTES attr;
-    UNICODE_STRING nt_name;
-    ANSI_STRING unix_name;
-    IO_STATUS_BLOCK io;
-    NTSTATUS status;
-    HANDLE handle;
-    BOOL ret = FALSE;
-
-    TRACE( "%s\n", debugstr_w(path) );
-
-    if (!RtlDosPathNameToNtPathName_U( path, &nt_name, NULL, NULL ))
-    {
-        SetLastError( ERROR_PATH_NOT_FOUND );
-        return FALSE;
-    }
-    attr.Length = sizeof(attr);
-    attr.RootDirectory = 0;
-    attr.Attributes = OBJ_CASE_INSENSITIVE;
-    attr.ObjectName = &nt_name;
-    attr.SecurityDescriptor = NULL;
-    attr.SecurityQualityOfService = NULL;
-
-    if (!set_ntstatus( NtOpenFile( &handle, DELETE | SYNCHRONIZE, &attr, &io,
-                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                   FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT )))
-    {
-        RtlFreeUnicodeString( &nt_name );
-        return FALSE;
-    }
-
-    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN, FALSE );
-    RtlFreeUnicodeString( &nt_name );
-    if (!set_ntstatus( status ))
-    {
-        NtClose( handle );
-        return FALSE;
-    }
-
-    if (!(ret = (rmdir( unix_name.Buffer ) != -1))) FILE_SetDosError();
-    RtlFreeAnsiString( &unix_name );
-    NtClose( handle );
-    return ret;
-}
-
-
-/***********************************************************************
- *           RemoveDirectoryA   (KERNEL32.@)
- */
-BOOL WINAPI RemoveDirectoryA( LPCSTR path )
-{
-    WCHAR *pathW;
-
-    if (!(pathW = FILE_name_AtoW( path, FALSE ))) return FALSE;
-    return RemoveDirectoryW( pathW );
-}
-
-
-/***********************************************************************
  *           GetSystemDirectoryW   (KERNEL32.@)
  *
  * See comment for GetWindowsDirectoryA.
@@ -342,7 +280,7 @@ char * CDECL wine_get_unix_file_name( LPCWSTR dosW )
     NTSTATUS status;
 
     if (!RtlDosPathNameToNtPathName_U( dosW, &nt_name, NULL, NULL )) return NULL;
-    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN_IF, FALSE );
+    status = wine_nt_to_unix_file_name( &nt_name, &unix_name, FILE_OPEN_IF );
     RtlFreeUnicodeString( &nt_name );
     if (status && status != STATUS_NO_SUCH_FILE)
     {
@@ -363,10 +301,24 @@ WCHAR * CDECL wine_get_dos_file_name( LPCSTR str )
 {
     UNICODE_STRING nt_name;
     ANSI_STRING unix_name;
+    NTSTATUS status;
+    WCHAR *buffer;
     DWORD len;
 
-    RtlInitAnsiString( &unix_name, str );
-    if (!set_ntstatus( wine_unix_to_nt_file_name( &unix_name, &nt_name ))) return NULL;
+    if (str[0] != '/')  /* relative path name */
+    {
+        len = strlen( str ) + 1;
+        if (!(buffer = RtlAllocateHeap( GetProcessHeap(), 0, len * sizeof(WCHAR) ))) return NULL;
+        MultiByteToWideChar( CP_UNIXCP, 0, str, len, buffer, len );
+        status = RtlDosPathNameToNtPathName_U_WithStatus( buffer, &nt_name, NULL, NULL );
+        RtlFreeHeap( GetProcessHeap(), 0, buffer );
+    }
+    else
+    {
+        RtlInitAnsiString( &unix_name, str );
+        status = wine_unix_to_nt_file_name( &unix_name, &nt_name );
+    }
+    if (!set_ntstatus( status )) return NULL;
     if (nt_name.Buffer[5] == ':')
     {
         /* get rid of the \??\ prefix */

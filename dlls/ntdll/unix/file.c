@@ -3248,10 +3248,9 @@ static NTSTATUS nt_to_unix_file_name_attr( const OBJECT_ATTRIBUTES *attr, ANSI_S
     char *unix_name;
     int name_len, unix_len;
     NTSTATUS status;
-    BOOLEAN check_case = !(attr->Attributes & OBJ_CASE_INSENSITIVE);
 
     if (!attr->RootDirectory)  /* without root dir fall back to normal lookup */
-        return nt_to_unix_file_name( attr->ObjectName, unix_name_ret, disposition, check_case );
+        return nt_to_unix_file_name( attr->ObjectName, unix_name_ret, disposition );
 
     name     = attr->ObjectName->Buffer;
     name_len = attr->ObjectName->Length / sizeof(WCHAR);
@@ -3280,7 +3279,7 @@ static NTSTATUS nt_to_unix_file_name_attr( const OBJECT_ATTRIBUTES *attr, ANSI_S
             if ((old_cwd = open( ".", O_RDONLY )) != -1 && fchdir( root_fd ) != -1)
             {
                 status = lookup_unix_name( name, name_len, &unix_name, unix_len, 1,
-                                           disposition, check_case );
+                                           disposition, FALSE );
                 if (fchdir( old_cwd ) == -1) chdir( "/" );
             }
             else status = STATUS_ACCESS_DENIED;
@@ -3317,7 +3316,7 @@ static NTSTATUS nt_to_unix_file_name_attr( const OBJECT_ATTRIBUTES *attr, ANSI_S
  * returned, but the unix name is still filled in properly.
  */
 NTSTATUS CDECL nt_to_unix_file_name( const UNICODE_STRING *nameW, ANSI_STRING *unix_name_ret,
-                                     UINT disposition, BOOLEAN check_case )
+                                     UINT disposition )
 {
     static const WCHAR unixW[] = {'u','n','i','x'};
     static const WCHAR invalid_charsW[] = { INVALID_NT_CHARS, 0 };
@@ -3328,6 +3327,7 @@ NTSTATUS CDECL nt_to_unix_file_name( const UNICODE_STRING *nameW, ANSI_STRING *u
     char *unix_name;
     int pos, ret, name_len, unix_len, prefix_len;
     WCHAR prefix[MAX_DIR_ENTRY_LEN + 1];
+    BOOLEAN check_case = FALSE;
     BOOLEAN is_unix = FALSE;
 
     name     = nameW->Buffer;
@@ -6322,4 +6322,214 @@ NTSTATUS WINAPI NtSetVolumeInformationFile( HANDLE handle, IO_STATUS_BLOCK *io, 
 {
     FIXME( "(%p,%p,%p,0x%08x,0x%08x) stub\n", handle, io, info, length, class );
     return STATUS_SUCCESS;
+}
+
+
+/**************************************************************************
+ *           NtQueryObject
+ */
+NTSTATUS WINAPI NtQueryObject( HANDLE handle, OBJECT_INFORMATION_CLASS info_class,
+                               void *ptr, ULONG len, ULONG *used_len )
+{
+    NTSTATUS status;
+
+    TRACE("(%p,0x%08x,%p,0x%08x,%p)\n", handle, info_class, ptr, len, used_len);
+
+    if (used_len) *used_len = 0;
+
+    switch (info_class)
+    {
+    case ObjectBasicInformation:
+    {
+        OBJECT_BASIC_INFORMATION *p = ptr;
+
+        if (len < sizeof(*p)) return STATUS_INVALID_BUFFER_SIZE;
+
+        SERVER_START_REQ( get_object_info )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            status = wine_server_call( req );
+            if (status == STATUS_SUCCESS)
+            {
+                memset( p, 0, sizeof(*p) );
+                p->GrantedAccess = reply->access;
+                p->PointerCount = reply->ref_count;
+                p->HandleCount = reply->handle_count;
+                if (used_len) *used_len = sizeof(*p);
+            }
+        }
+        SERVER_END_REQ;
+        break;
+    }
+
+    case ObjectNameInformation:
+    {
+        OBJECT_NAME_INFORMATION *p = ptr;
+        ANSI_STRING unix_name;
+
+        /* first try as a file object */
+
+        if (!(status = server_get_unix_name( handle, &unix_name )))
+        {
+            UNICODE_STRING nt_name;
+
+            if (!(status = unix_to_nt_file_name( &unix_name, &nt_name )))
+            {
+                if (len < sizeof(*p)) status = STATUS_INFO_LENGTH_MISMATCH;
+                else if (len < sizeof(*p) + nt_name.MaximumLength) status = STATUS_BUFFER_OVERFLOW;
+                else
+                {
+                    p->Name.Buffer = (WCHAR *)(p + 1);
+                    p->Name.Length = nt_name.Length;
+                    p->Name.MaximumLength = nt_name.MaximumLength;
+                    memcpy( p->Name.Buffer, nt_name.Buffer, nt_name.MaximumLength );
+                }
+                if (used_len) *used_len = sizeof(*p) + nt_name.MaximumLength;
+                RtlFreeUnicodeString( &nt_name );
+            }
+            RtlFreeAnsiString( &unix_name );
+            break;
+        }
+        else if (status != STATUS_OBJECT_TYPE_MISMATCH) break;
+
+        /* not a file, treat as a generic object */
+
+        SERVER_START_REQ( get_object_info )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            if (len > sizeof(*p)) wine_server_set_reply( req, p + 1, len - sizeof(*p) );
+            status = wine_server_call( req );
+            if (status == STATUS_SUCCESS)
+            {
+                if (!reply->total)  /* no name */
+                {
+                    if (sizeof(*p) > len) status = STATUS_INFO_LENGTH_MISMATCH;
+                    else memset( p, 0, sizeof(*p) );
+                    if (used_len) *used_len = sizeof(*p);
+                }
+                else if (sizeof(*p) + reply->total + sizeof(WCHAR) > len)
+                {
+                    if (used_len) *used_len = sizeof(*p) + reply->total + sizeof(WCHAR);
+                    status = STATUS_INFO_LENGTH_MISMATCH;
+                }
+                else
+                {
+                    ULONG res = wine_server_reply_size( reply );
+                    p->Name.Buffer = (WCHAR *)(p + 1);
+                    p->Name.Length = res;
+                    p->Name.MaximumLength = res + sizeof(WCHAR);
+                    p->Name.Buffer[res / sizeof(WCHAR)] = 0;
+                    if (used_len) *used_len = sizeof(*p) + p->Name.MaximumLength;
+                }
+            }
+        }
+        SERVER_END_REQ;
+        break;
+    }
+
+    case ObjectTypeInformation:
+    {
+        OBJECT_TYPE_INFORMATION *p = ptr;
+
+        SERVER_START_REQ( get_object_type )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            if (len > sizeof(*p)) wine_server_set_reply( req, p + 1, len - sizeof(*p) );
+            status = wine_server_call( req );
+            if (status == STATUS_SUCCESS)
+            {
+                if (!reply->total)  /* no name */
+                {
+                    if (sizeof(*p) > len) status = STATUS_INFO_LENGTH_MISMATCH;
+                    else memset( p, 0, sizeof(*p) );
+                    if (used_len) *used_len = sizeof(*p);
+                }
+                else if (sizeof(*p) + reply->total + sizeof(WCHAR) > len)
+                {
+                    if (used_len) *used_len = sizeof(*p) + reply->total + sizeof(WCHAR);
+                    status = STATUS_INFO_LENGTH_MISMATCH;
+                }
+                else
+                {
+                    ULONG res = wine_server_reply_size( reply );
+                    p->TypeName.Buffer = (WCHAR *)(p + 1);
+                    p->TypeName.Length = res;
+                    p->TypeName.MaximumLength = res + sizeof(WCHAR);
+                    p->TypeName.Buffer[res / sizeof(WCHAR)] = 0;
+                    if (used_len) *used_len = sizeof(*p) + p->TypeName.MaximumLength;
+                }
+            }
+        }
+        SERVER_END_REQ;
+        break;
+    }
+
+    case ObjectDataInformation:
+    {
+        OBJECT_DATA_INFORMATION* p = ptr;
+
+        if (len < sizeof(*p)) return STATUS_INVALID_BUFFER_SIZE;
+
+        SERVER_START_REQ( set_handle_info )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            req->flags  = 0;
+            req->mask   = 0;
+            status = wine_server_call( req );
+            if (status == STATUS_SUCCESS)
+            {
+                p->InheritHandle = (reply->old_flags & HANDLE_FLAG_INHERIT) != 0;
+                p->ProtectFromClose = (reply->old_flags & HANDLE_FLAG_PROTECT_FROM_CLOSE) != 0;
+                if (used_len) *used_len = sizeof(*p);
+            }
+        }
+        SERVER_END_REQ;
+        break;
+    }
+
+    default:
+        FIXME("Unsupported information class %u\n", info_class);
+        status = STATUS_NOT_IMPLEMENTED;
+        break;
+    }
+    return status;
+}
+
+
+/**************************************************************************
+ *           NtSetInformationObject
+ */
+NTSTATUS WINAPI NtSetInformationObject( HANDLE handle, OBJECT_INFORMATION_CLASS info_class,
+                                        void *ptr, ULONG len )
+{
+    NTSTATUS status;
+
+    TRACE("(%p,0x%08x,%p,0x%08x)\n", handle, info_class, ptr, len);
+
+    switch (info_class)
+    {
+    case ObjectDataInformation:
+    {
+        OBJECT_DATA_INFORMATION* p = ptr;
+
+        if (len < sizeof(*p)) return STATUS_INVALID_BUFFER_SIZE;
+
+        SERVER_START_REQ( set_handle_info )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            req->mask   = HANDLE_FLAG_INHERIT | HANDLE_FLAG_PROTECT_FROM_CLOSE;
+            if (p->InheritHandle)    req->flags |= HANDLE_FLAG_INHERIT;
+            if (p->ProtectFromClose) req->flags |= HANDLE_FLAG_PROTECT_FROM_CLOSE;
+            status = wine_server_call( req );
+        }
+        SERVER_END_REQ;
+    break;
+    }
+
+    default:
+        FIXME("Unsupported information class %u\n", info_class);
+        status = STATUS_NOT_IMPLEMENTED;
+        break;
+    }
+    return status;
 }

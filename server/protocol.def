@@ -1473,58 +1473,6 @@ enum server_fd_type
 @END
 
 
-#define CONSOLE_RENDERER_NONE_EVENT        0x00
-#define CONSOLE_RENDERER_TITLE_EVENT       0x01
-#define CONSOLE_RENDERER_ACTIVE_SB_EVENT   0x02
-#define CONSOLE_RENDERER_SB_RESIZE_EVENT   0x03
-#define CONSOLE_RENDERER_UPDATE_EVENT      0x04
-#define CONSOLE_RENDERER_CURSOR_POS_EVENT  0x05
-#define CONSOLE_RENDERER_CURSOR_GEOM_EVENT 0x06
-#define CONSOLE_RENDERER_DISPLAY_EVENT     0x07
-#define CONSOLE_RENDERER_EXIT_EVENT        0x08
-struct console_renderer_event
-{
-    short event;
-    union
-    {
-        struct
-        {
-            short top;
-            short bottom;
-        } update;
-        struct
-        {
-            short width;
-            short height;
-        } resize;
-        struct
-        {
-            short x;
-            short y;
-        } cursor_pos;
-        struct
-        {
-            short visible;
-            short size;
-        } cursor_geom;
-        struct
-        {
-            short left;
-            short top;
-            short width;
-            short height;
-        } display;
-    } u;
-};
-
-/* retrieve console events for the renderer */
-@REQ(get_console_renderer_events)
-    obj_handle_t handle;        /* handle to console input events */
-@REPLY
-    VARARG(data,bytes);         /* the various console_renderer_events */
-@END
-
-
 /* Open a handle to the process console */
 @REQ(open_console)
     obj_handle_t from;          /* console_in handle to get active screen buffer */
@@ -1697,14 +1645,6 @@ struct console_renderer_event
     VARARG(face_name,unicode_str);  /* font face name */
 @END
 
-/* Add input records to a console input queue */
-@REQ(write_console_input)
-    obj_handle_t handle;        /* handle to the console input */
-    VARARG(rec,input_records);  /* input records */
-@REPLY
-    int          written;       /* number of records written */
-@END
-
 
 /* write data (chars and/or attributes) in a screen buffer */
 @REQ(write_console_output)
@@ -1868,44 +1808,36 @@ enum char_info_mode
 @END
 
 
-#define SNAP_PROCESS    0x00000001
-#define SNAP_THREAD     0x00000002
-/* Create a snapshot */
-@REQ(create_snapshot)
-    unsigned int attributes;    /* object attributes */
-    unsigned int flags;         /* snapshot flags (SNAP_*) */
+struct thread_info
+{
+    timeout_t       start_time;
+    thread_id_t     tid;
+    int             base_priority;
+    int             current_priority;
+    int             unix_tid;
+};
+
+struct process_info
+{
+    timeout_t       start_time;
+    data_size_t     name_len;
+    int             thread_count;
+    int             priority;
+    process_id_t    pid;
+    process_id_t    parent_pid;
+    int             handle_count;
+    int             unix_pid;
+    int             __pad;
+    /* VARARG(name,unicode_str,name_len); */
+    /* VARARG(threads,struct thread_info,thread_count); */
+};
+
+/* Get a list of processes and threads currently running */
+@REQ(list_processes)
 @REPLY
-    obj_handle_t handle;        /* handle to the snapshot */
-@END
-
-
-/* Get the next process from a snapshot */
-@REQ(next_process)
-    obj_handle_t handle;        /* handle to the snapshot */
-    int          reset;         /* reset snapshot position? */
-@REPLY
-    int          count;         /* process usage count */
-    process_id_t pid;           /* process id */
-    process_id_t ppid;          /* parent process id */
-    int          threads;       /* number of threads */
-    int          priority;      /* process priority */
-    int          handles;       /* number of handles */
-    int          unix_pid;      /* Unix pid */
-    VARARG(filename,unicode_str); /* file name of main exe */
-@END
-
-
-/* Get the next thread from a snapshot */
-@REQ(next_thread)
-    obj_handle_t handle;        /* handle to the snapshot */
-    int          reset;         /* reset snapshot position? */
-@REPLY
-    int          count;         /* thread usage count */
-    process_id_t pid;           /* process id */
-    thread_id_t  tid;           /* thread id */
-    int          base_pri;      /* base priority */
-    int          delta_pri;     /* delta priority */
-    int          unix_tid;      /* thread native pid */
+    data_size_t     info_size;
+    int             process_count;
+    VARARG(data,process_info,info_size);
 @END
 
 
@@ -2363,10 +2295,9 @@ enum message_type
 @END
 
 
-/* Accept the current hardware message */
+/* Accept and remove the current hardware message */
 @REQ(accept_hardware_message)
     unsigned int    hw_id;     /* id of the hardware message */
-    int             remove;    /* should we remove the message? */
 @END
 
 

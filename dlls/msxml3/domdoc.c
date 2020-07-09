@@ -824,7 +824,7 @@ static HRESULT WINAPI PersistStreamInit_Load(IPersistStreamInit *iface, IStream 
     if (!stream)
         return E_INVALIDARG;
 
-    return domdoc_load_from_stream(This, (ISequentialStream*)stream);
+    return This->error = domdoc_load_from_stream(This, (ISequentialStream*)stream);
 }
 
 static HRESULT WINAPI PersistStreamInit_Save(
@@ -2276,7 +2276,7 @@ static HRESULT WINAPI domdoc_load(
 
         if (hr == S_OK)
         {
-            hr = domdoc_load_from_stream(This, stream);
+            hr = This->error = domdoc_load_from_stream(This, stream);
             if (hr == S_OK)
                 *isSuccessful = VARIANT_TRUE;
             ISequentialStream_Release(stream);

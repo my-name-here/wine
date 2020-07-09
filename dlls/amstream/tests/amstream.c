@@ -686,6 +686,7 @@ static void test_add_stream(void)
     IEnumFilters *enum_filters;
     IBaseFilter *filters[3];
     IGraphBuilder *graph;
+    FILTER_INFO info;
     ULONG ref, count;
     CLSID clsid;
     HRESULT hr;
@@ -755,13 +756,18 @@ static void test_add_stream(void)
     hr = IAMMultiMediaStream_AddMediaStream(mmstream, (IUnknown *)&teststream, &IID_IUnknown, 0, &stream);
     ok(hr == MS_E_PURPOSEID, "Got hr %#x.\n", hr);
 
+    hr = IMediaStreamFilter_QueryFilterInfo(stream_filter, &info);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
     hr = IAMMultiMediaStream_AddMediaStream(mmstream, (IUnknown *)&teststream, &test_mspid, 0, &stream);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
     ok(stream == (IMediaStream *)&teststream, "Streams didn't match.\n");
-    if (hr == S_OK) IMediaStream_Release(stream);
+    IMediaStream_Release(stream);
     ok(teststream.mmstream == mmstream, "IAMMultiMediaStream objects didn't match.\n");
     ok(teststream.filter == stream_filter, "IMediaStreamFilter objects didn't match.\n");
-    todo_wine ok(!!teststream.graph, "Expected a non-NULL graph.\n");
+    ok(teststream.graph == info.pGraph, "IFilterGraph objects didn't match.\n");
+
+    IFilterGraph_Release(info.pGraph);
 
     check_enum_stream(mmstream, stream_filter, 0, video_stream);
     check_enum_stream(mmstream, stream_filter, 1, audio_stream);
@@ -888,8 +894,6 @@ static void test_add_stream(void)
         hr = IAMMultiMediaStream_GetFilterGraph(mmstream, &graph);
         ok(hr == S_OK, "Got hr %#x.\n", hr);
         ok(!!graph, "Got graph %p.\n", graph);
-        hr = IAMMultiMediaStream_GetFilter(mmstream, &stream_filter);
-        ok(hr == S_OK, "Got hr %#x.\n", hr);
         hr = IGraphBuilder_EnumFilters(graph, &enum_filters);
         ok(hr == S_OK, "Got hr %#x.\n", hr);
         hr = IEnumFilters_Next(enum_filters, 3, filters, &count);
@@ -901,7 +905,7 @@ static void test_add_stream(void)
         ok(hr == S_OK, "Got hr %#x.\n", hr);
         ok(IsEqualGUID(&clsid, &CLSID_DSoundRender), "Got unexpected filter %s.\n", wine_dbgstr_guid(&clsid));
         IBaseFilter_Release(filters[0]);
-        IMediaStreamFilter_Release(stream_filter);
+        IBaseFilter_Release(filters[1]);
         IEnumFilters_Release(enum_filters);
         IGraphBuilder_Release(graph);
     }
@@ -913,8 +917,9 @@ static void test_add_stream(void)
             AMMSF_ADDDEFAULTRENDERER, &audio_stream);
     ok(hr == E_INVALIDARG, "Got hr %#x.\n", hr);
 
-    IMediaStreamFilter_Release(stream_filter);
     ref = IAMMultiMediaStream_Release(mmstream);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+    ref = IMediaStreamFilter_Release(stream_filter);
     ok(!ref, "Got outstanding refcount %d.\n", ref);
 }
 

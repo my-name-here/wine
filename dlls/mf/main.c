@@ -26,8 +26,6 @@
 #include "mfidl.h"
 #include "rpcproxy.h"
 
-#include "mfapi.h"
-
 #include "mf_private.h"
 
 #include "wine/debug.h"
@@ -91,7 +89,8 @@ static ULONG WINAPI activate_object_Release(IMFActivate *iface)
 
     if (!refcount)
     {
-        activate->funcs->free_private(activate->context);
+        if (activate->funcs->free_private)
+            activate->funcs->free_private(activate->context);
         if (activate->object)
             IUnknown_Release(activate->object);
         IMFAttributes_Release(activate->attributes);

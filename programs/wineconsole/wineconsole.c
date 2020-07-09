@@ -241,21 +241,20 @@ static void WINECON_SetColors(struct inner_data *data, const struct config_data*
  */
 void	WINECON_GrabChanges(struct inner_data* data)
 {
-    struct console_renderer_event	evts[256];
-    int	i, num, ev_found;
+    struct condrv_renderer_event *evts = data->events;
+    int i, ev_found;
+    DWORD num;
     HANDLE h;
 
     if (data->in_grab_changes) return;
 
-    SERVER_START_REQ( get_console_renderer_events )
+    if (!GetOverlappedResult(data->hSynchro, &data->overlapped, &num, FALSE))
     {
-        wine_server_set_reply( req, evts, sizeof(evts) );
-        req->handle = wine_server_obj_handle( data->hSynchro );
-        if (!wine_server_call_err( req )) num = wine_server_reply_size(reply) / sizeof(evts[0]);
-        else num = 0;
+        ERR( "failed to get renderer events: %u\n", GetLastError() );
+        data->dying = TRUE;
+        return;
     }
-    SERVER_END_REQ;
-    if (!num) {WINE_WARN("hmm renderer signaled but no events available\n"); return;}
+    num /= sizeof(data->events[0]);
     WINE_TRACE( "got %u events\n", num );
 
     /* FIXME: should do some event compression here (cursor pos, update) */
@@ -399,6 +398,13 @@ void	WINECON_GrabChanges(struct inner_data* data)
 	}
     }
     data->in_grab_changes = FALSE;
+
+    if (!DeviceIoControl(data->hSynchro, IOCTL_CONDRV_GET_RENDERER_EVENTS, NULL, 0, data->events,
+                         sizeof(data->events), NULL, &data->overlapped) && GetLastError() != ERROR_IO_PENDING)
+    {
+        ERR("failed to get renderer events: %u\n", GetLastError());
+        data->dying = TRUE;
+    }
 }
 
 /******************************************************************
@@ -589,6 +595,7 @@ static void WINECON_Delete(struct inner_data* data)
     if (data->hConOut)		CloseHandle(data->hConOut);
     if (data->hSynchro)		CloseHandle(data->hSynchro);
     if (data->hProcess)         CloseHandle(data->hProcess);
+    if (data->overlapped.hEvent) CloseHandle(data->overlapped.hEvent);
     HeapFree(GetProcessHeap(), 0, data->curcfg.registry);
     HeapFree(GetProcessHeap(), 0, data->cells);
     HeapFree(GetProcessHeap(), 0, data);
@@ -603,19 +610,16 @@ static void WINECON_Delete(struct inner_data* data)
  */
 static BOOL WINECON_GetServerConfig(struct inner_data* data)
 {
+    struct condrv_input_info input_info;
     BOOL  ret;
     DWORD mode;
 
-    SERVER_START_REQ(get_console_input_info)
-    {
-        req->handle = wine_server_obj_handle( data->hConIn );
-        ret = !wine_server_call_err( req );
-        data->curcfg.history_size = reply->history_size;
-        data->curcfg.history_nodup = reply->history_mode;
-        data->curcfg.edition_mode = reply->edition_mode;
-    }
-    SERVER_END_REQ;
-    if (!ret) return FALSE;
+    if (!DeviceIoControl(data->hConIn, IOCTL_CONDRV_GET_INPUT_INFO, NULL, 0,
+                         &input_info, sizeof(input_info), NULL, NULL))
+        return FALSE;
+    data->curcfg.history_size  = input_info.history_size;
+    data->curcfg.history_nodup = input_info.history_mode;
+    data->curcfg.edition_mode  = input_info.edition_mode;
 
     GetConsoleMode(data->hConIn, &mode);
     data->curcfg.insert_mode = (mode & (ENABLE_INSERT_MODE|ENABLE_EXTENDED_FLAGS)) ==
@@ -677,6 +681,8 @@ static struct inner_data* WINECON_Init(HINSTANCE hInst, DWORD pid, LPCWSTR appna
             cfg.def_attr = si.dwFillAttribute;
         /* should always be defined */
     }
+
+    if (!(data->overlapped.hEvent = CreateEventW(NULL, TRUE, TRUE, NULL))) goto error;
 
     /* the handles here are created without the whistles and bells required by console
      * (mainly because wineconsole doesn't need it)

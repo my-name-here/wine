@@ -41,6 +41,7 @@ DEFINE_GUID(MFVideoFormat_ABGR32, 0x00000020, 0x0000, 0x0010, 0x80, 0x00, 0x00, 
 #include "initguid.h"
 #include "mmdeviceapi.h"
 #include "audioclient.h"
+#include "evr.h"
 
 #include "wine/test.h"
 
@@ -3226,10 +3227,15 @@ todo_wine
 
 static void test_evr(void)
 {
+    IMFMediaEventGenerator *ev_generator;
+    IMFVideoRenderer *video_renderer;
+    IMFClockStateSink *clock_sink;
     IMFMediaSinkPreroll *preroll;
     IMFMediaSink *sink, *sink2;
     IMFActivate *activate;
     DWORD flags, count;
+    IMFGetService *gs;
+    IUnknown *unk;
     UINT64 value;
     HRESULT hr;
 
@@ -3260,6 +3266,27 @@ static void test_evr(void)
     hr = IMFMediaSink_QueryInterface(sink, &IID_IMFMediaSinkPreroll, (void **)&preroll);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
     IMFMediaSinkPreroll_Release(preroll);
+
+    hr = IMFMediaSink_QueryInterface(sink, &IID_IMFVideoRenderer, (void **)&video_renderer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IMFVideoRenderer_Release(video_renderer);
+
+    hr = IMFMediaSink_QueryInterface(sink, &IID_IMFMediaEventGenerator, (void **)&ev_generator);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IMFMediaEventGenerator_Release(ev_generator);
+
+    hr = IMFMediaSink_QueryInterface(sink, &IID_IMFClockStateSink, (void **)&clock_sink);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IMFClockStateSink_Release(clock_sink);
+
+    hr = IMFMediaSink_QueryInterface(sink, &IID_IMFGetService, (void **)&gs);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFGetService_GetService(gs, &MR_VIDEO_MIXER_SERVICE, &IID_IMFVideoMixerControl, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+
+    IMFGetService_Release(gs);
 
     hr = IMFActivate_ShutdownObject(activate);
     ok(hr == S_OK, "Failed to shut down, hr %#x.\n", hr);

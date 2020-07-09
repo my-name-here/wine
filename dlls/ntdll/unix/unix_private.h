@@ -125,7 +125,7 @@ extern NTSTATUS CDECL unwind_builtin_dll( ULONG type, struct _DISPATCHER_CONTEXT
                                           CONTEXT *context ) DECLSPEC_HIDDEN;
 
 extern NTSTATUS CDECL nt_to_unix_file_name( const UNICODE_STRING *nameW, ANSI_STRING *unix_name_ret,
-                                            UINT disposition, BOOLEAN check_case ) DECLSPEC_HIDDEN;
+                                            UINT disposition ) DECLSPEC_HIDDEN;
 extern NTSTATUS CDECL unix_to_nt_file_name( const ANSI_STRING *name, UNICODE_STRING *nt ) DECLSPEC_HIDDEN;
 extern void CDECL set_show_dot_files( BOOL enable ) DECLSPEC_HIDDEN;
 
@@ -223,6 +223,7 @@ extern void signal_init_process(void) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_start_thread( PRTL_THREAD_START_ROUTINE entry, void *arg,
                                                    BOOL suspend, void *relay, TEB *teb ) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_exit_thread( int status, void (*func)(int) ) DECLSPEC_HIDDEN;
+extern void __wine_syscall_dispatcher(void) DECLSPEC_HIDDEN;
 
 extern NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
                                        IO_STATUS_BLOCK *io, ULONG code, void *in_buffer,
@@ -241,7 +242,8 @@ extern void init_cpu_info(void) DECLSPEC_HIDDEN;
 
 extern void dbg_init(void) DECLSPEC_HIDDEN;
 
-extern void WINAPI call_user_exception_dispatcher(EXCEPTION_RECORD *rec, CONTEXT *context) DECLSPEC_HIDDEN;
+extern void WINAPI call_user_exception_dispatcher( EXCEPTION_RECORD *rec, CONTEXT *context,
+                                                   NTSTATUS (WINAPI *dispatcher)(EXCEPTION_RECORD*,CONTEXT*) ) DECLSPEC_HIDDEN;
 
 #define TICKSPERSEC 10000000
 #define SECS_1601_TO_1970  ((369 * 365 + 89) * (ULONGLONG)86400)
