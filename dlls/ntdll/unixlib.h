@@ -28,7 +28,7 @@ struct msghdr;
 struct _DISPATCHER_CONTEXT;
 
 /* increment this when you change the function table */
-#define NTDLL_UNIXLIB_VERSION 73
+#define NTDLL_UNIXLIB_VERSION 74
 
 struct unix_funcs
 {
@@ -332,9 +332,9 @@ struct unix_funcs
     void          (CDECL *server_init_process_done)( void *relay );
 
     /* file functions */
-    NTSTATUS      (CDECL *nt_to_unix_file_name)( const UNICODE_STRING *nameW, ANSI_STRING *unix_name_ret,
+    NTSTATUS      (CDECL *nt_to_unix_file_name)( const UNICODE_STRING *nameW, char *nameA, SIZE_T *size,
                                                  UINT disposition );
-    NTSTATUS      (CDECL *unix_to_nt_file_name)( const ANSI_STRING *name, UNICODE_STRING *nt );
+    NTSTATUS      (CDECL *unix_to_nt_file_name)( const char *name, WCHAR *buffer, SIZE_T *size );
     void          (CDECL *set_show_dot_files)( BOOL enable );
 
     /* loader functions */

@@ -1958,6 +1958,12 @@ static void setup_raise_exception( ucontext_t *sigcontext, struct stack_layout *
         return;
     }
 
+    if (stack->rec.ExceptionCode == EXCEPTION_BREAKPOINT)
+    {
+        /* fix up instruction pointer in context for EXCEPTION_BREAKPOINT */
+        stack->context.Rip--;
+    }
+
     /* now modify the sigcontext to return to the raise function */
     RIP_sig(sigcontext) = (ULONG_PTR)raise_func_trampoline;
     R8_sig(sigcontext)  = (ULONG_PTR)pKiUserExceptionDispatcher;
@@ -1983,6 +1989,13 @@ void WINAPI do_call_user_exception_dispatcher( EXCEPTION_RECORD *rec, CONTEXT *c
 {
     memmove(&stack->context, context, sizeof(*context));
     memcpy(&stack->rec, rec, sizeof(*rec));
+
+    if (stack->rec.ExceptionCode == EXCEPTION_BREAKPOINT)
+    {
+        /* fix up instruction pointer in context for EXCEPTION_BREAKPOINT */
+        stack->context.Rip--;
+    }
+
     user_exception_dispatcher_trampoline( stack, dispatcher );
 }
 
@@ -1990,7 +2003,7 @@ __ASM_GLOBAL_FUNC( call_user_exception_dispatcher,
                    "movq 0x98(%rdx),%r9\n\t" /* context->Rsp */
                    "andq $~0xf,%r9\n\t"
                    "subq $0x630,%r9\n\t" /* sizeof(struct stack_layout) */
-                   "cmpq %r9,%rsp\n\t"
+                   "cmpq %rsp,%r9\n\t"
                    "cmovbq %r9,%rsp\n\t"
                    "jmp " __ASM_NAME("do_call_user_exception_dispatcher") "\n\t")
 

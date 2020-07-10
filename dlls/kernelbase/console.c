@@ -159,18 +159,17 @@ static void fill_console_output( HANDLE handle, int i, int j, int len, CHAR_INFO
 /* helper function for GetLargestConsoleWindowSize */
 static COORD get_largest_console_window_size( HANDLE handle )
 {
+    struct condrv_output_info info;
     COORD c = { 0, 0 };
 
-    SERVER_START_REQ( get_console_output_info )
+    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &info, sizeof(info), NULL, NULL ))
     {
-        req->handle = console_handle_unmap( handle );
-        if (!wine_server_call_err( req ))
-        {
-            c.X = reply->max_width;
-            c.Y = reply->max_height;
-        }
+        SetLastError( ERROR_INVALID_HANDLE );
+        return c;
     }
-    SERVER_END_REQ;
+
+    c.X = info.max_width;
+    c.Y = info.max_height;
     TRACE( "(%p), returning %dx%d\n", handle, c.X, c.Y );
     return c;
 }
@@ -542,26 +541,22 @@ UINT WINAPI DECLSPEC_HOTPATCH GetConsoleCP(void)
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleCursorInfo( HANDLE handle, CONSOLE_CURSOR_INFO *info )
 {
-    BOOL ret;
+    struct condrv_output_info condrv_info;
 
-    SERVER_START_REQ( get_console_output_info )
+    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &condrv_info, sizeof(condrv_info), NULL, NULL ))
     {
-        req->handle = console_handle_unmap( handle );
-        ret = !wine_server_call_err( req );
-        if (ret && info)
-        {
-            info->dwSize = reply->cursor_size;
-            info->bVisible = reply->cursor_visible;
-        }
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
     }
-    SERVER_END_REQ;
 
-    if (!ret) return FALSE;
     if (!info)
     {
         SetLastError( ERROR_INVALID_ACCESS );
         return FALSE;
     }
+
+    info->dwSize   = condrv_info.cursor_size;
+    info->bVisible = condrv_info.cursor_visible;
     TRACE("(%p) returning (%d,%d)\n", handle, info->dwSize, info->bVisible);
     return TRUE;
 }
@@ -639,33 +634,32 @@ UINT WINAPI DECLSPEC_HOTPATCH GetConsoleOutputCP(void)
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfo( HANDLE handle, CONSOLE_SCREEN_BUFFER_INFO *info )
 {
-    BOOL ret;
+    struct condrv_output_info condrv_info;
 
-    SERVER_START_REQ( get_console_output_info )
+    if (!DeviceIoControl( handle , IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0,
+                          &condrv_info, sizeof(condrv_info), NULL, NULL ))
     {
-        req->handle = console_handle_unmap( handle );
-        if ((ret = !wine_server_call_err( req )))
-        {
-            info->dwSize.X              = reply->width;
-            info->dwSize.Y              = reply->height;
-            info->dwCursorPosition.X    = reply->cursor_x;
-            info->dwCursorPosition.Y    = reply->cursor_y;
-            info->wAttributes           = reply->attr;
-            info->srWindow.Left         = reply->win_left;
-            info->srWindow.Right        = reply->win_right;
-            info->srWindow.Top          = reply->win_top;
-            info->srWindow.Bottom       = reply->win_bottom;
-            info->dwMaximumWindowSize.X = min(reply->width, reply->max_width);
-            info->dwMaximumWindowSize.Y = min(reply->height, reply->max_height);
-        }
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
     }
-    SERVER_END_REQ;
+
+    info->dwSize.X              = condrv_info.width;
+    info->dwSize.Y              = condrv_info.height;
+    info->dwCursorPosition.X    = condrv_info.cursor_x;
+    info->dwCursorPosition.Y    = condrv_info.cursor_y;
+    info->wAttributes           = condrv_info.attr;
+    info->srWindow.Left         = condrv_info.win_left;
+    info->srWindow.Right        = condrv_info.win_right;
+    info->srWindow.Top          = condrv_info.win_top;
+    info->srWindow.Bottom       = condrv_info.win_bottom;
+    info->dwMaximumWindowSize.X = min(condrv_info.width, condrv_info.max_width);
+    info->dwMaximumWindowSize.Y = min(condrv_info.height, condrv_info.max_height);
 
     TRACE( "(%p,(%d,%d) (%d,%d) %d (%d,%d-%d,%d) (%d,%d)\n", handle,
            info->dwSize.X, info->dwSize.Y, info->dwCursorPosition.X, info->dwCursorPosition.Y,
-	  info->wAttributes, info->srWindow.Left, info->srWindow.Top, info->srWindow.Right,
+           info->wAttributes, info->srWindow.Left, info->srWindow.Top, info->srWindow.Right,
            info->srWindow.Bottom, info->dwMaximumWindowSize.X, info->dwMaximumWindowSize.Y );
-    return ret;
+    return TRUE;
 }
 
 
@@ -675,7 +669,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfo( HANDLE handle, CONSOLE
 BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfoEx( HANDLE handle,
                                                             CONSOLE_SCREEN_BUFFER_INFOEX *info )
 {
-    BOOL ret;
+    struct condrv_output_info condrv_info;
 
     if (info->cbSize != sizeof(CONSOLE_SCREEN_BUFFER_INFOEX))
     {
@@ -683,29 +677,28 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfoEx( HANDLE handle,
         return FALSE;
     }
 
-    SERVER_START_REQ( get_console_output_info )
+    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &condrv_info,
+                          sizeof(condrv_info), NULL, NULL ))
     {
-        req->handle = console_handle_unmap( handle );
-        wine_server_set_reply( req, info->ColorTable, sizeof(info->ColorTable) );
-        if ((ret = !wine_server_call_err( req )))
-        {
-            info->dwSize.X              = reply->width;
-            info->dwSize.Y              = reply->height;
-            info->dwCursorPosition.X    = reply->cursor_x;
-            info->dwCursorPosition.Y    = reply->cursor_y;
-            info->wAttributes           = reply->attr;
-            info->srWindow.Left         = reply->win_left;
-            info->srWindow.Top          = reply->win_top;
-            info->srWindow.Right        = reply->win_right;
-            info->srWindow.Bottom       = reply->win_bottom;
-            info->dwMaximumWindowSize.X = min( reply->width, reply->max_width );
-            info->dwMaximumWindowSize.Y = min( reply->height, reply->max_height );
-            info->wPopupAttributes      = reply->popup_attr;
-            info->bFullscreenSupported  = FALSE;
-        }
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
     }
-    SERVER_END_REQ;
-    return ret;
+
+    info->dwSize.X              = condrv_info.width;
+    info->dwSize.Y              = condrv_info.height;
+    info->dwCursorPosition.X    = condrv_info.cursor_x;
+    info->dwCursorPosition.Y    = condrv_info.cursor_y;
+    info->wAttributes           = condrv_info.attr;
+    info->srWindow.Left         = condrv_info.win_left;
+    info->srWindow.Top          = condrv_info.win_top;
+    info->srWindow.Right        = condrv_info.win_right;
+    info->srWindow.Bottom       = condrv_info.win_bottom;
+    info->dwMaximumWindowSize.X = min( condrv_info.width, condrv_info.max_width );
+    info->dwMaximumWindowSize.Y = min( condrv_info.height, condrv_info.max_height );
+    info->wPopupAttributes      = condrv_info.popup_attr;
+    info->bFullscreenSupported  = FALSE;
+    memcpy( info->ColorTable, condrv_info.color_map, sizeof(info->ColorTable) );
+    return TRUE;
 }
 
 
