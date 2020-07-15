@@ -175,6 +175,9 @@ static struct list teb_list = LIST_INIT( teb_list );
 #ifndef MAP_TRYFIXED
 #define MAP_TRYFIXED 0
 #endif
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0
+#endif
 
 #ifdef _WIN64  /* on 64-bit the page protection bytes use a 2-level table */
 static const size_t pages_vprot_shift = 20;
@@ -1005,9 +1008,16 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
 
     while (start && base <= start && (char*)start + size <= (char*)end)
     {
-        if ((ptr = wine_anon_mmap( start, size, unix_prot, 0 )) == start)
+        if ((ptr = wine_anon_mmap( start, size, unix_prot, MAP_FIXED_NOREPLACE )) == start)
             return start;
         TRACE( "Found free area is already mapped, start %p.\n", start );
+
+        if (ptr == (void *)-1 && errno != EEXIST)
+        {
+            ERR( "wine_anon_mmap() error %s, range %p-%p, unix_prot %#x.\n",
+                    strerror(errno), start, (char *)start + size, unix_prot );
+            return NULL;
+        }
 
         if (ptr != (void *)-1)
             munmap( ptr, size );
@@ -2728,7 +2738,7 @@ NTSTATUS CDECL virtual_alloc_thread_stack( INITIAL_TEB *stack, SIZE_T reserve_si
 
     if (!reserve_size || !commit_size)
     {
-        IMAGE_NT_HEADERS *nt = RtlImageNtHeader( NtCurrentTeb()->Peb->ImageBaseAddress );
+        IMAGE_NT_HEADERS *nt = get_exe_nt_header();
         if (!reserve_size) reserve_size = nt->OptionalHeader.SizeOfStackReserve;
         if (!commit_size) commit_size = nt->OptionalHeader.SizeOfStackCommit;
     }
@@ -2804,16 +2814,14 @@ void virtual_clear_thread_stack( void *stack_end )
  */
 void virtual_map_user_shared_data(void)
 {
-    static const WCHAR wine_usdW[] = {'\\','K','e','r','n','e','l','O','b','j','e','c','t','s',
-                                      '\\','_','_','w','i','n','e','_','u','s','e','r','_','s','h','a','r','e','d','_','d','a','t','a',0};
-    OBJECT_ATTRIBUTES attr = {sizeof(attr)};
-    UNICODE_STRING wine_usd_str;
+    static const WCHAR nameW[] = {'\\','K','e','r','n','e','l','O','b','j','e','c','t','s',
+                                  '\\','_','_','w','i','n','e','_','u','s','e','r','_','s','h','a','r','e','d','_','d','a','t','a',0};
+    UNICODE_STRING name_str = { sizeof(nameW) - sizeof(WCHAR), sizeof(nameW), (WCHAR *)nameW };
+    OBJECT_ATTRIBUTES attr = { sizeof(attr), 0, &name_str };
     NTSTATUS status;
     HANDLE section;
     int res, fd, needs_close;
 
-    RtlInitUnicodeString( &wine_usd_str, wine_usdW );
-    InitializeObjectAttributes( &attr, &wine_usd_str, OBJ_OPENIF, NULL, NULL );
     if ((status = NtOpenSection( &section, SECTION_ALL_ACCESS, &attr )))
     {
         ERR( "failed to open the USD section: %08x\n", status );
@@ -3325,7 +3333,7 @@ void CDECL virtual_release_address_space(void)
  */
 void CDECL virtual_set_large_address_space(void)
 {
-    IMAGE_NT_HEADERS *nt = RtlImageNtHeader( NtCurrentTeb()->Peb->ImageBaseAddress );
+    IMAGE_NT_HEADERS *nt = get_exe_nt_header();
 
     if (!(nt->FileHeader.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)) return;
     /* no large address space on win9x */

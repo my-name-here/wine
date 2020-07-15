@@ -80,6 +80,28 @@ static inline obj_handle_t console_handle_unmap( HANDLE h )
     return wine_server_obj_handle( console_handle_map( h ) );
 }
 
+static BOOL console_ioctl( HANDLE handle, DWORD code, void *in_buff, DWORD in_count,
+                           void *out_buff, DWORD out_count, DWORD *read )
+{
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+
+    status = NtDeviceIoControlFile( handle, NULL, NULL, NULL, &io, code, in_buff, in_count,
+                                    out_buff, out_count );
+    switch( status )
+    {
+    case STATUS_SUCCESS:
+        if (read) *read = io.Information;
+        return TRUE;
+    case STATUS_INVALID_PARAMETER:
+        break;
+    default:
+        status = STATUS_INVALID_HANDLE;
+        break;
+    }
+    return set_ntstatus( status );
+}
+
 /* map input records to ASCII */
 static void input_records_WtoA( INPUT_RECORD *buffer, int count )
 {
@@ -141,19 +163,16 @@ static void char_info_AtoW( CHAR_INFO *buffer, int count )
 /* helper function for ScrollConsoleScreenBufferW */
 static void fill_console_output( HANDLE handle, int i, int j, int len, CHAR_INFO *fill )
 {
-    SERVER_START_REQ( fill_console_output )
-    {
-        req->handle    = console_handle_unmap( handle );
-        req->mode      = CHAR_INFO_MODE_TEXTATTR;
-        req->x         = i;
-        req->y         = j;
-        req->count     = len;
-        req->wrap      = FALSE;
-        req->data.ch   = fill->Char.UnicodeChar;
-        req->data.attr = fill->Attributes;
-        wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
+    struct condrv_fill_output_params params;
+
+    params.mode  = CHAR_INFO_MODE_TEXTATTR;
+    params.x     = i;
+    params.y     = j;
+    params.count = len;
+    params.wrap  = FALSE;
+    params.ch    = fill->Char.UnicodeChar;
+    params.attr  = fill->Attributes;
+    console_ioctl( handle, IOCTL_CONDRV_FILL_OUTPUT, &params, sizeof(params), NULL, 0, NULL );
 }
 
 /* helper function for GetLargestConsoleWindowSize */
@@ -162,11 +181,8 @@ static COORD get_largest_console_window_size( HANDLE handle )
     struct condrv_output_info info;
     COORD c = { 0, 0 };
 
-    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &info, sizeof(info), NULL, NULL ))
-    {
-        SetLastError( ERROR_INVALID_HANDLE );
+    if (!console_ioctl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &info, sizeof(info), NULL ))
         return c;
-    }
 
     c.X = info.max_width;
     c.Y = info.max_height;
@@ -381,7 +397,7 @@ DWORD WINAPI CtrlRoutine( void *arg )
 BOOL WINAPI DECLSPEC_HOTPATCH FillConsoleOutputAttribute( HANDLE handle, WORD attr, DWORD length,
                                                            COORD coord, DWORD *written )
 {
-    BOOL ret;
+    struct condrv_fill_output_params params;
 
     TRACE( "(%p,%d,%d,(%dx%d),%p)\n", handle, attr, length, coord.X, coord.Y, written );
 
@@ -392,19 +408,16 @@ BOOL WINAPI DECLSPEC_HOTPATCH FillConsoleOutputAttribute( HANDLE handle, WORD at
     }
 
     *written = 0;
-    SERVER_START_REQ( fill_console_output )
-    {
-        req->handle    = console_handle_unmap( handle );
-        req->x         = coord.X;
-        req->y         = coord.Y;
-        req->mode      = CHAR_INFO_MODE_ATTR;
-        req->wrap      = TRUE;
-        req->data.attr = attr;
-        req->count     = length;
-        if ((ret = !wine_server_call_err( req ))) *written = reply->written;
-    }
-    SERVER_END_REQ;
-    return ret;
+
+    params.mode  = CHAR_INFO_MODE_ATTR;
+    params.x     = coord.X;
+    params.y     = coord.Y;
+    params.count = length;
+    params.wrap  = TRUE;
+    params.ch    = 0;
+    params.attr  = attr;
+    return console_ioctl( handle, IOCTL_CONDRV_FILL_OUTPUT, &params, sizeof(params),
+                          written, sizeof(written), NULL );
 }
 
 
@@ -427,7 +440,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH FillConsoleOutputCharacterA( HANDLE handle, CHAR c
 BOOL WINAPI DECLSPEC_HOTPATCH FillConsoleOutputCharacterW( HANDLE handle, WCHAR ch, DWORD length,
                                                            COORD coord, DWORD *written )
 {
-    BOOL ret;
+    struct condrv_fill_output_params params;
 
     TRACE( "(%p,%s,%d,(%dx%d),%p)\n", handle, debugstr_wn(&ch, 1), length, coord.X, coord.Y, written );
 
@@ -438,19 +451,16 @@ BOOL WINAPI DECLSPEC_HOTPATCH FillConsoleOutputCharacterW( HANDLE handle, WCHAR 
     }
 
     *written = 0;
-    SERVER_START_REQ( fill_console_output )
-    {
-        req->handle  = console_handle_unmap( handle );
-        req->x       = coord.X;
-        req->y       = coord.Y;
-        req->mode    = CHAR_INFO_MODE_TEXT;
-        req->wrap    = TRUE;
-        req->data.ch = ch;
-        req->count   = length;
-        if ((ret = !wine_server_call_err( req ))) *written = reply->written;
-    }
-    SERVER_END_REQ;
-    return ret;
+
+    params.mode  = CHAR_INFO_MODE_TEXT;
+    params.x     = coord.X;
+    params.y     = coord.Y;
+    params.count = length;
+    params.wrap  = TRUE;
+    params.ch    = ch;
+    params.attr  = 0;
+    return console_ioctl( handle, IOCTL_CONDRV_FILL_OUTPUT, &params, sizeof(params),
+                          written, sizeof(written), NULL );
 }
 
 HANDLE get_console_wait_handle( HANDLE handle )
@@ -543,11 +553,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleCursorInfo( HANDLE handle, CONSOLE_CURSO
 {
     struct condrv_output_info condrv_info;
 
-    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &condrv_info, sizeof(condrv_info), NULL, NULL ))
-    {
-        SetLastError( ERROR_INVALID_HANDLE );
+    if (!console_ioctl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &condrv_info, sizeof(condrv_info), NULL ))
         return FALSE;
-    }
 
     if (!info)
     {
@@ -594,18 +601,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleInputExeNameW( DWORD len, LPWSTR buffer 
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleMode( HANDLE handle, DWORD *mode )
 {
-    BOOL ret;
-
-    SERVER_START_REQ( get_console_mode )
-    {
-        req->handle = console_handle_unmap( handle );
-        if ((ret = !wine_server_call_err( req )))
-        {
-            if (mode) *mode = reply->mode;
-        }
-    }
-    SERVER_END_REQ;
-    return ret;
+    return console_ioctl( handle, IOCTL_CONDRV_GET_MODE, NULL, 0, mode, sizeof(*mode), NULL );
 }
 
 
@@ -636,12 +632,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfo( HANDLE handle, CONSOLE
 {
     struct condrv_output_info condrv_info;
 
-    if (!DeviceIoControl( handle , IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0,
-                          &condrv_info, sizeof(condrv_info), NULL, NULL ))
-    {
-        SetLastError( ERROR_INVALID_HANDLE );
+    if (!console_ioctl( handle , IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0,
+                        &condrv_info, sizeof(condrv_info), NULL ))
         return FALSE;
-    }
 
     info->dwSize.X              = condrv_info.width;
     info->dwSize.Y              = condrv_info.height;
@@ -677,12 +670,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfoEx( HANDLE handle,
         return FALSE;
     }
 
-    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &condrv_info,
-                          sizeof(condrv_info), NULL, NULL ))
-    {
-        SetLastError( ERROR_INVALID_HANDLE );
+    if (!console_ioctl( handle, IOCTL_CONDRV_GET_OUTPUT_INFO, NULL, 0, &condrv_info,
+                        sizeof(condrv_info), NULL ))
         return FALSE;
-    }
 
     info->dwSize.X              = condrv_info.width;
     info->dwSize.Y              = condrv_info.height;
@@ -755,7 +745,7 @@ COORD WINAPI DECLSPEC_HOTPATCH GetLargestConsoleWindowSize( HANDLE handle )
 BOOL WINAPI DECLSPEC_HOTPATCH GetNumberOfConsoleInputEvents( HANDLE handle, DWORD *count )
 {
     struct condrv_input_info info;
-    if (!DeviceIoControl( handle, IOCTL_CONDRV_GET_INPUT_INFO, NULL, 0, &info, sizeof(info), NULL, NULL ))
+    if (!console_ioctl( handle, IOCTL_CONDRV_GET_INPUT_INFO, NULL, 0, &info, sizeof(info), NULL ))
         return FALSE;
     *count = info.input_count;
     return TRUE;
@@ -784,7 +774,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH PeekConsoleInputW( HANDLE handle, INPUT_RECORD *bu
                                                  DWORD length, DWORD *count )
 {
     DWORD read;
-    if (!DeviceIoControl( handle, IOCTL_CONDRV_PEEK, NULL, 0, buffer, length * sizeof(*buffer), &read, NULL ))
+    if (!console_ioctl( handle, IOCTL_CONDRV_PEEK, NULL, 0, buffer, length * sizeof(*buffer), &read ))
         return FALSE;
     if (count) *count = read / sizeof(*buffer);
     return TRUE;
@@ -1169,20 +1159,14 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleCtrlHandler( PHANDLER_ROUTINE func, BOOL
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleCursorInfo( HANDLE handle, CONSOLE_CURSOR_INFO *info )
 {
-    BOOL ret;
+    struct condrv_output_info_params params = { SET_CONSOLE_OUTPUT_INFO_CURSOR_GEOM };
 
     TRACE( "(%p,%d,%d)\n", handle, info->dwSize, info->bVisible);
 
-    SERVER_START_REQ( set_console_output_info )
-    {
-        req->handle         = console_handle_unmap( handle );
-        req->cursor_size    = info->dwSize;
-        req->cursor_visible = info->bVisible;
-        req->mask           = SET_CONSOLE_OUTPUT_INFO_CURSOR_GEOM;
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-    return ret;
+    params.info.cursor_size    = info->dwSize;
+    params.info.cursor_visible = info->bVisible;
+    return console_ioctl( handle, IOCTL_CONDRV_SET_OUTPUT_INFO, &params, sizeof(params),
+                          NULL, 0, NULL );
 }
 
 
@@ -1191,23 +1175,18 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleCursorInfo( HANDLE handle, CONSOLE_CURSO
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleCursorPosition( HANDLE handle, COORD pos )
 {
+    struct condrv_output_info_params params = { SET_CONSOLE_OUTPUT_INFO_CURSOR_POS };
     CONSOLE_SCREEN_BUFFER_INFO info;
     int w, h, do_move = 0;
-    BOOL ret;
 
     TRACE( "%p %d %d\n", handle, pos.X, pos.Y );
 
-    SERVER_START_REQ( set_console_output_info )
-    {
-        req->handle         = console_handle_unmap( handle );
-        req->cursor_x       = pos.X;
-        req->cursor_y       = pos.Y;
-        req->mask           = SET_CONSOLE_OUTPUT_INFO_CURSOR_POS;
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
+    params.info.cursor_x = pos.X;
+    params.info.cursor_y = pos.Y;
+    if (!console_ioctl( handle, IOCTL_CONDRV_SET_OUTPUT_INFO, &params, sizeof(params), NULL, 0, NULL ))
+        return FALSE;
 
-    if (!ret || !GetConsoleScreenBufferInfo( handle, &info )) return FALSE;
+    if (!GetConsoleScreenBufferInfo( handle, &info )) return FALSE;
 
     /* if cursor is no longer visible, scroll the visible window... */
     w = info.srWindow.Right - info.srWindow.Left + 1;
@@ -1236,8 +1215,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleCursorPosition( HANDLE handle, COORD pos
     }
     info.srWindow.Bottom = info.srWindow.Top + h - 1;
 
-    if (do_move) ret = SetConsoleWindowInfo( handle, TRUE, &info.srWindow );
-    return ret;
+    return !do_move || SetConsoleWindowInfo( handle, TRUE, &info.srWindow );
 }
 
 
@@ -1280,18 +1258,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleInputExeNameW( LPCWSTR name )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleMode( HANDLE handle, DWORD mode )
 {
-    BOOL ret;
-
-    SERVER_START_REQ(set_console_mode)
-    {
-	req->handle = console_handle_unmap( handle );
-	req->mode = mode;
-	ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-
-    TRACE( "(%p,%x) retval == %d\n", handle, mode, ret );
-    return ret;
+    TRACE( "(%p,%x)\n", handle, mode );
+    return console_ioctl( handle, IOCTL_CONDRV_SET_MODE, &mode, sizeof(mode), NULL, 0, NULL );
 }
 
 
@@ -1325,7 +1293,10 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleOutputCP( UINT cp )
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleScreenBufferInfoEx( HANDLE handle,
                                                             CONSOLE_SCREEN_BUFFER_INFOEX *info )
 {
-    BOOL ret;
+    struct condrv_output_info_params params =
+        { SET_CONSOLE_OUTPUT_INFO_CURSOR_POS | SET_CONSOLE_OUTPUT_INFO_SIZE |
+          SET_CONSOLE_OUTPUT_INFO_ATTR | SET_CONSOLE_OUTPUT_INFO_POPUP_ATTR |
+          SET_CONSOLE_OUTPUT_INFO_DISPLAY_WINDOW | SET_CONSOLE_OUTPUT_INFO_MAX_SIZE };
 
     TRACE("(%p, %p)\n", handle, info);
 
@@ -1335,29 +1306,19 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleScreenBufferInfoEx( HANDLE handle,
         return FALSE;
     }
 
-    SERVER_START_REQ( set_console_output_info )
-    {
-        req->handle     = console_handle_unmap( handle );
-        req->mask       = SET_CONSOLE_OUTPUT_INFO_CURSOR_POS | SET_CONSOLE_OUTPUT_INFO_SIZE |
-                          SET_CONSOLE_OUTPUT_INFO_ATTR | SET_CONSOLE_OUTPUT_INFO_POPUP_ATTR |
-                          SET_CONSOLE_OUTPUT_INFO_DISPLAY_WINDOW | SET_CONSOLE_OUTPUT_INFO_MAX_SIZE;
-        req->width      = info->dwSize.X;
-        req->height     = info->dwSize.Y;
-        req->cursor_x   = info->dwCursorPosition.X;
-        req->cursor_y   = info->dwCursorPosition.Y;
-        req->attr       = info->wAttributes;
-        req->win_left   = info->srWindow.Left;
-        req->win_top    = info->srWindow.Top;
-        req->win_right  = info->srWindow.Right;
-        req->win_bottom = info->srWindow.Bottom;
-        req->popup_attr = info->wPopupAttributes;
-        req->max_width  = min( info->dwMaximumWindowSize.X, info->dwSize.X );
-        req->max_height = min( info->dwMaximumWindowSize.Y, info->dwSize.Y );
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-
-    return ret;
+    params.info.width      = info->dwSize.X;
+    params.info.height     = info->dwSize.Y;
+    params.info.cursor_x   = info->dwCursorPosition.X;
+    params.info.cursor_y   = info->dwCursorPosition.Y;
+    params.info.attr       = info->wAttributes;
+    params.info.win_left   = info->srWindow.Left;
+    params.info.win_top    = info->srWindow.Top;
+    params.info.win_right  = info->srWindow.Right;
+    params.info.win_bottom = info->srWindow.Bottom;
+    params.info.popup_attr = info->wPopupAttributes;
+    params.info.max_width  = min( info->dwMaximumWindowSize.X, info->dwSize.X );
+    params.info.max_height = min( info->dwMaximumWindowSize.Y, info->dwSize.Y );
+    return console_ioctl( handle, IOCTL_CONDRV_SET_OUTPUT_INFO, &params, sizeof(params), NULL, 0, NULL );
 }
 
 
@@ -1366,19 +1327,13 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleScreenBufferInfoEx( HANDLE handle,
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleScreenBufferSize( HANDLE handle, COORD size )
 {
-    BOOL ret;
+    struct condrv_output_info_params params = { SET_CONSOLE_OUTPUT_INFO_SIZE };
 
     TRACE( "(%p,(%d,%d))\n", handle, size.X, size.Y );
-    SERVER_START_REQ( set_console_output_info )
-    {
-        req->handle = console_handle_unmap( handle );
-        req->width  = size.X;
-        req->height = size.Y;
-        req->mask   = SET_CONSOLE_OUTPUT_INFO_SIZE;
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-    return ret;
+
+    params.info.width  = size.X;
+    params.info.height = size.Y;
+    return console_ioctl( handle, IOCTL_CONDRV_SET_OUTPUT_INFO, &params, sizeof(params), NULL, 0, NULL );
 }
 
 
@@ -1387,18 +1342,12 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleScreenBufferSize( HANDLE handle, COORD s
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleTextAttribute( HANDLE handle, WORD attr )
 {
-    BOOL ret;
+    struct condrv_output_info_params params = { SET_CONSOLE_OUTPUT_INFO_ATTR };
 
     TRACE( "(%p,%d)\n", handle, attr );
-    SERVER_START_REQ( set_console_output_info )
-    {
-        req->handle = console_handle_unmap( handle );
-        req->attr   = attr;
-        req->mask   = SET_CONSOLE_OUTPUT_INFO_ATTR;
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-    return ret;
+
+    params.info.attr = attr;
+    return console_ioctl( handle, IOCTL_CONDRV_SET_OUTPUT_INFO, &params, sizeof(params), NULL, 0, NULL );
 }
 
 
@@ -1427,8 +1376,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleTitleW( LPCWSTR title )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleWindowInfo( HANDLE handle, BOOL absolute, SMALL_RECT *window )
 {
+    struct condrv_output_info_params params = { SET_CONSOLE_OUTPUT_INFO_DISPLAY_WINDOW };
     SMALL_RECT rect = *window;
-    BOOL ret;
 
     TRACE( "(%p,%d,(%d,%d-%d,%d))\n", handle, absolute, rect.Left, rect.Top, rect.Right, rect.Bottom );
 
@@ -1442,19 +1391,12 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetConsoleWindowInfo( HANDLE handle, BOOL absolute
 	rect.Right  += info.srWindow.Right;
 	rect.Bottom += info.srWindow.Bottom;
     }
-    SERVER_START_REQ( set_console_output_info )
-    {
-        req->handle     = console_handle_unmap( handle );
-	req->win_left   = rect.Left;
-	req->win_top    = rect.Top;
-	req->win_right  = rect.Right;
-	req->win_bottom = rect.Bottom;
-        req->mask       = SET_CONSOLE_OUTPUT_INFO_DISPLAY_WINDOW;
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
 
-    return ret;
+    params.info.win_left   = rect.Left;
+    params.info.win_top    = rect.Top;
+    params.info.win_right  = rect.Right;
+    params.info.win_bottom = rect.Bottom;
+    return console_ioctl( handle, IOCTL_CONDRV_SET_OUTPUT_INFO, &params, sizeof(params), NULL, 0, NULL );
 }
 
 

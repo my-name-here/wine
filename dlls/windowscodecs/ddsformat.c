@@ -103,6 +103,7 @@ typedef struct dds_info {
     UINT mip_levels;
     UINT array_size;
     UINT frame_count;
+    UINT data_offset;
     DXGI_FORMAT format;
     WICDdsDimension dimension;
     WICDdsAlphaMode alpha_mode;
@@ -124,12 +125,11 @@ typedef struct dds_frame_info {
 typedef struct DdsDecoder {
     IWICBitmapDecoder IWICBitmapDecoder_iface;
     IWICDdsDecoder IWICDdsDecoder_iface;
+    IWICWineDecoder IWICWineDecoder_iface;
     LONG ref;
     BOOL initialized;
     IStream *stream;
     CRITICAL_SECTION lock;
-    DDS_HEADER header;
-    DDS_HEADER_DXT10 header_dxt10;
     dds_info info;
 } DdsDecoder;
 
@@ -226,10 +226,12 @@ static void get_dds_info(dds_info* info, DDS_HEADER *header, DDS_HEADER_DXT10 *h
         info->format = header_dxt10->dxgiFormat;
         info->dimension = get_dimension(NULL, header_dxt10);
         info->alpha_mode = header_dxt10->miscFlags2 & 0x00000008;
+        info->data_offset = sizeof(DWORD) + sizeof(*header) + sizeof(*header_dxt10);
     } else {
         info->format = get_format_from_fourcc(header->ddspf.fourCC);
         info->dimension = get_dimension(header, NULL);
         info->alpha_mode = get_alpha_mode_from_fourcc(header->ddspf.fourCC);
+        info->data_offset = sizeof(DWORD) + sizeof(*header);
     }
     info->pixel_format = (info->alpha_mode == WICDdsAlphaModePremultiplied) ?
                          &GUID_WICPixelFormat32bppPBGRA : &GUID_WICPixelFormat32bppBGRA;
@@ -278,6 +280,11 @@ static inline DdsDecoder *impl_from_IWICBitmapDecoder(IWICBitmapDecoder *iface)
 static inline DdsDecoder *impl_from_IWICDdsDecoder(IWICDdsDecoder *iface)
 {
     return CONTAINING_RECORD(iface, DdsDecoder, IWICDdsDecoder_iface);
+}
+
+static inline DdsDecoder *impl_from_IWICWineDecoder(IWICWineDecoder *iface)
+{
+    return CONTAINING_RECORD(iface, DdsDecoder, IWICWineDecoder_iface);
 }
 
 static inline DdsFrameDecode *impl_from_IWICBitmapFrameDecode(IWICBitmapFrameDecode *iface)
@@ -565,6 +572,8 @@ static HRESULT WINAPI DdsDecoder_QueryInterface(IWICBitmapDecoder *iface, REFIID
         *ppv = &This->IWICBitmapDecoder_iface;
     } else if (IsEqualIID(&IID_IWICDdsDecoder, iid)) {
         *ppv = &This->IWICDdsDecoder_iface;
+    } else if (IsEqualIID(&IID_IWICWineDecoder, iid)) {
+        *ppv = &This->IWICWineDecoder_iface;
     } else {
         *ppv = NULL;
         return E_NOINTERFACE;
@@ -614,6 +623,8 @@ static HRESULT WINAPI DdsDecoder_Initialize(IWICBitmapDecoder *iface, IStream *p
                                             WICDecodeOptions cacheOptions)
 {
     DdsDecoder *This = impl_from_IWICBitmapDecoder(iface);
+    DDS_HEADER_DXT10 header_dxt10;
+    DDS_HEADER header;
     HRESULT hr;
     LARGE_INTEGER seek;
     DWORD magic;
@@ -643,27 +654,27 @@ static HRESULT WINAPI DdsDecoder_Initialize(IWICBitmapDecoder *iface, IStream *p
         goto end;
     }
 
-    hr = IStream_Read(pIStream, &This->header, sizeof(This->header), &bytesread);
+    hr = IStream_Read(pIStream, &header, sizeof(header), &bytesread);
     if (FAILED(hr)) goto end;
-    if (bytesread != sizeof(This->header)) {
+    if (bytesread != sizeof(header)) {
         hr = WINCODEC_ERR_STREAMREAD;
         goto end;
     }
-    if (This->header.size != sizeof(This->header)) {
+    if (header.size != sizeof(header)) {
         hr = WINCODEC_ERR_BADHEADER;
         goto end;
     }
 
-    if (has_extended_header(&This->header)) {
-        hr = IStream_Read(pIStream, &This->header_dxt10, sizeof(This->header_dxt10), &bytesread);
+    if (has_extended_header(&header)) {
+        hr = IStream_Read(pIStream, &header_dxt10, sizeof(header_dxt10), &bytesread);
         if (FAILED(hr)) goto end;
-        if (bytesread != sizeof(This->header_dxt10)) {
+        if (bytesread != sizeof(header_dxt10)) {
             hr = WINCODEC_ERR_STREAMREAD;
             goto end;
         }
     }
 
-    get_dds_info(&This->info, &This->header, &This->header_dxt10);
+    get_dds_info(&This->info, &header, &header_dxt10);
 
     This->initialized = TRUE;
     This->stream = pIStream;
@@ -888,8 +899,7 @@ static HRESULT WINAPI DdsDecoder_Dds_GetFrame(IWICDdsDecoder *iface,
     }
 
     bytes_per_block = get_bytes_per_block(This->info.format);
-    seek.QuadPart = sizeof(DWORD) + sizeof(DDS_HEADER);
-    if (has_extended_header(&This->header)) seek.QuadPart += sizeof(DDS_HEADER_DXT10);
+    seek.QuadPart = This->info.data_offset;
 
     width = This->info.width;
     height = This->info.height;
@@ -957,6 +967,37 @@ static const IWICDdsDecoderVtbl DdsDecoder_Dds_Vtbl = {
     DdsDecoder_Dds_GetFrame
 };
 
+static HRESULT WINAPI DdsDecoder_Wine_QueryInterface(IWICWineDecoder *iface, REFIID iid, void **ppv)
+{
+    DdsDecoder *This = impl_from_IWICWineDecoder(iface);
+    return DdsDecoder_QueryInterface(&This->IWICBitmapDecoder_iface, iid, ppv);
+}
+
+static ULONG WINAPI DdsDecoder_Wine_AddRef(IWICWineDecoder *iface)
+{
+    DdsDecoder *This = impl_from_IWICWineDecoder(iface);
+    return DdsDecoder_AddRef(&This->IWICBitmapDecoder_iface);
+}
+
+static ULONG WINAPI DdsDecoder_Wine_Release(IWICWineDecoder *iface)
+{
+    DdsDecoder *This = impl_from_IWICWineDecoder(iface);
+    return DdsDecoder_Release(&This->IWICBitmapDecoder_iface);
+}
+
+static HRESULT WINAPI DdsDecoder_Wine_Initialize(IWICWineDecoder *iface, IStream *stream, WICDecodeOptions options)
+{
+    FIXME("(This %p, stream %p, options %#x)\n", iface, stream, options);
+    return E_NOTIMPL;
+}
+
+static const IWICWineDecoderVtbl DdsDecoder_Wine_Vtbl = {
+    DdsDecoder_Wine_QueryInterface,
+    DdsDecoder_Wine_AddRef,
+    DdsDecoder_Wine_Release,
+    DdsDecoder_Wine_Initialize
+};
+
 HRESULT DdsDecoder_CreateInstance(REFIID iid, void** ppv)
 {
     DdsDecoder *This;
@@ -971,6 +1012,7 @@ HRESULT DdsDecoder_CreateInstance(REFIID iid, void** ppv)
 
     This->IWICBitmapDecoder_iface.lpVtbl = &DdsDecoder_Vtbl;
     This->IWICDdsDecoder_iface.lpVtbl = &DdsDecoder_Dds_Vtbl;
+    This->IWICWineDecoder_iface.lpVtbl = &DdsDecoder_Wine_Vtbl;
     This->ref = 1;
     This->initialized = FALSE;
     This->stream = NULL;

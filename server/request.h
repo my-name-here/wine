@@ -185,16 +185,12 @@ DECL_HANDLER(free_console);
 DECL_HANDLER(open_console);
 DECL_HANDLER(attach_console);
 DECL_HANDLER(get_console_wait_event);
-DECL_HANDLER(get_console_mode);
-DECL_HANDLER(set_console_mode);
 DECL_HANDLER(set_console_input_info);
 DECL_HANDLER(get_console_input_info);
 DECL_HANDLER(append_console_input_history);
 DECL_HANDLER(get_console_input_history);
 DECL_HANDLER(create_console_output);
-DECL_HANDLER(set_console_output_info);
 DECL_HANDLER(write_console_output);
-DECL_HANDLER(fill_console_output);
 DECL_HANDLER(read_console_output);
 DECL_HANDLER(move_console_output);
 DECL_HANDLER(send_console_signal);
@@ -482,16 +478,12 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_open_console,
     (req_handler)req_attach_console,
     (req_handler)req_get_console_wait_event,
-    (req_handler)req_get_console_mode,
-    (req_handler)req_set_console_mode,
     (req_handler)req_set_console_input_info,
     (req_handler)req_get_console_input_info,
     (req_handler)req_append_console_input_history,
     (req_handler)req_get_console_input_history,
     (req_handler)req_create_console_output,
-    (req_handler)req_set_console_output_info,
     (req_handler)req_write_console_output,
-    (req_handler)req_fill_console_output,
     (req_handler)req_read_console_output,
     (req_handler)req_move_console_output,
     (req_handler)req_send_console_signal,
@@ -717,7 +709,6 @@ C_ASSERT( sizeof(apc_result_t) == 40 );
 C_ASSERT( sizeof(async_data_t) == 40 );
 C_ASSERT( sizeof(atom_t) == 4 );
 C_ASSERT( sizeof(char) == 1 );
-C_ASSERT( sizeof(char_info_t) == 4 );
 C_ASSERT( sizeof(client_cpu_t) == 4 );
 C_ASSERT( sizeof(client_ptr_t) == 8 );
 C_ASSERT( sizeof(data_size_t) == 4 );
@@ -1143,13 +1134,6 @@ C_ASSERT( FIELD_OFFSET(struct get_console_wait_event_request, handle) == 12 );
 C_ASSERT( sizeof(struct get_console_wait_event_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct get_console_wait_event_reply, event) == 8 );
 C_ASSERT( sizeof(struct get_console_wait_event_reply) == 16 );
-C_ASSERT( FIELD_OFFSET(struct get_console_mode_request, handle) == 12 );
-C_ASSERT( sizeof(struct get_console_mode_request) == 16 );
-C_ASSERT( FIELD_OFFSET(struct get_console_mode_reply, mode) == 8 );
-C_ASSERT( sizeof(struct get_console_mode_reply) == 16 );
-C_ASSERT( FIELD_OFFSET(struct set_console_mode_request, handle) == 12 );
-C_ASSERT( FIELD_OFFSET(struct set_console_mode_request, mode) == 16 );
-C_ASSERT( sizeof(struct set_console_mode_request) == 24 );
 C_ASSERT( FIELD_OFFSET(struct set_console_input_info_request, handle) == 12 );
 C_ASSERT( FIELD_OFFSET(struct set_console_input_info_request, mask) == 16 );
 C_ASSERT( FIELD_OFFSET(struct set_console_input_info_request, active_sb) == 20 );
@@ -1185,27 +1169,6 @@ C_ASSERT( FIELD_OFFSET(struct create_console_output_request, fd) == 28 );
 C_ASSERT( sizeof(struct create_console_output_request) == 32 );
 C_ASSERT( FIELD_OFFSET(struct create_console_output_reply, handle_out) == 8 );
 C_ASSERT( sizeof(struct create_console_output_reply) == 16 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, handle) == 12 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, mask) == 16 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, cursor_size) == 20 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, cursor_visible) == 22 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, cursor_x) == 24 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, cursor_y) == 26 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, width) == 28 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, height) == 30 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, attr) == 32 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, popup_attr) == 34 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, win_left) == 36 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, win_top) == 38 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, win_right) == 40 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, win_bottom) == 42 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, max_width) == 44 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, max_height) == 46 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, font_width) == 48 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, font_height) == 50 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, font_weight) == 52 );
-C_ASSERT( FIELD_OFFSET(struct set_console_output_info_request, font_pitch_family) == 54 );
-C_ASSERT( sizeof(struct set_console_output_info_request) == 56 );
 C_ASSERT( FIELD_OFFSET(struct write_console_output_request, handle) == 12 );
 C_ASSERT( FIELD_OFFSET(struct write_console_output_request, x) == 16 );
 C_ASSERT( FIELD_OFFSET(struct write_console_output_request, y) == 20 );
@@ -1216,16 +1179,6 @@ C_ASSERT( FIELD_OFFSET(struct write_console_output_reply, written) == 8 );
 C_ASSERT( FIELD_OFFSET(struct write_console_output_reply, width) == 12 );
 C_ASSERT( FIELD_OFFSET(struct write_console_output_reply, height) == 16 );
 C_ASSERT( sizeof(struct write_console_output_reply) == 24 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, handle) == 12 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, x) == 16 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, y) == 20 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, mode) == 24 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, count) == 28 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, wrap) == 32 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_request, data) == 36 );
-C_ASSERT( sizeof(struct fill_console_output_request) == 40 );
-C_ASSERT( FIELD_OFFSET(struct fill_console_output_reply, written) == 8 );
-C_ASSERT( sizeof(struct fill_console_output_reply) == 16 );
 C_ASSERT( FIELD_OFFSET(struct read_console_output_request, handle) == 12 );
 C_ASSERT( FIELD_OFFSET(struct read_console_output_request, x) == 16 );
 C_ASSERT( FIELD_OFFSET(struct read_console_output_request, y) == 20 );

@@ -353,13 +353,6 @@ typedef union
 } message_data_t;
 
 
-typedef struct
-{
-    WCHAR          ch;
-    unsigned short attr;
-} char_info_t;
-
-
 struct filesystem_event
 {
     int         action;
@@ -647,6 +640,7 @@ typedef union
         unsigned int     status;
         process_id_t     pid;
         thread_id_t      tid;
+        client_ptr_t     teb;
         obj_handle_t     handle;
     } create_thread;
     struct
@@ -1891,33 +1885,6 @@ struct get_console_wait_event_reply
 };
 
 
-struct get_console_mode_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-};
-struct get_console_mode_reply
-{
-    struct reply_header __header;
-    int          mode;
-    char __pad_12[4];
-};
-
-
-
-struct set_console_mode_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    int          mode;
-    char __pad_20[4];
-};
-struct set_console_mode_reply
-{
-    struct reply_header __header;
-};
-
-
 
 struct set_console_input_info_request
 {
@@ -2017,48 +1984,6 @@ struct create_console_output_reply
 
 
 
-struct set_console_output_info_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    int          mask;
-    short int    cursor_size;
-    short int    cursor_visible;
-    short int    cursor_x;
-    short int    cursor_y;
-    short int    width;
-    short int    height;
-    short int    attr;
-    short int    popup_attr;
-    short int    win_left;
-    short int    win_top;
-    short int    win_right;
-    short int    win_bottom;
-    short int    max_width;
-    short int    max_height;
-    short int    font_width;
-    short int    font_height;
-    short int    font_weight;
-    short int    font_pitch_family;
-    /* VARARG(colors,uints,64); */
-    /* VARARG(face_name,unicode_str); */
-};
-struct set_console_output_info_reply
-{
-    struct reply_header __header;
-};
-#define SET_CONSOLE_OUTPUT_INFO_CURSOR_GEOM     0x0001
-#define SET_CONSOLE_OUTPUT_INFO_CURSOR_POS      0x0002
-#define SET_CONSOLE_OUTPUT_INFO_SIZE            0x0004
-#define SET_CONSOLE_OUTPUT_INFO_ATTR            0x0008
-#define SET_CONSOLE_OUTPUT_INFO_DISPLAY_WINDOW  0x0010
-#define SET_CONSOLE_OUTPUT_INFO_MAX_SIZE        0x0020
-#define SET_CONSOLE_OUTPUT_INFO_FONT            0x0040
-#define SET_CONSOLE_OUTPUT_INFO_COLORTABLE      0x0080
-#define SET_CONSOLE_OUTPUT_INFO_POPUP_ATTR      0x0100
-
-
-
 struct write_console_output_request
 {
     struct request_header __header;
@@ -2083,26 +2008,6 @@ enum char_info_mode
     CHAR_INFO_MODE_ATTR,
     CHAR_INFO_MODE_TEXTATTR,
     CHAR_INFO_MODE_TEXTSTDATTR
-};
-
-
-
-struct fill_console_output_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    int          x;
-    int          y;
-    int          mode;
-    int          count;
-    int          wrap;
-    char_info_t  data;
-};
-struct fill_console_output_reply
-{
-    struct reply_header __header;
-    int          written;
-    char __pad_12[4];
 };
 
 
@@ -5736,16 +5641,12 @@ enum request
     REQ_open_console,
     REQ_attach_console,
     REQ_get_console_wait_event,
-    REQ_get_console_mode,
-    REQ_set_console_mode,
     REQ_set_console_input_info,
     REQ_get_console_input_info,
     REQ_append_console_input_history,
     REQ_get_console_input_history,
     REQ_create_console_output,
-    REQ_set_console_output_info,
     REQ_write_console_output,
-    REQ_fill_console_output,
     REQ_read_console_output,
     REQ_move_console_output,
     REQ_send_console_signal,
@@ -6034,16 +5935,12 @@ union generic_request
     struct open_console_request open_console_request;
     struct attach_console_request attach_console_request;
     struct get_console_wait_event_request get_console_wait_event_request;
-    struct get_console_mode_request get_console_mode_request;
-    struct set_console_mode_request set_console_mode_request;
     struct set_console_input_info_request set_console_input_info_request;
     struct get_console_input_info_request get_console_input_info_request;
     struct append_console_input_history_request append_console_input_history_request;
     struct get_console_input_history_request get_console_input_history_request;
     struct create_console_output_request create_console_output_request;
-    struct set_console_output_info_request set_console_output_info_request;
     struct write_console_output_request write_console_output_request;
-    struct fill_console_output_request fill_console_output_request;
     struct read_console_output_request read_console_output_request;
     struct move_console_output_request move_console_output_request;
     struct send_console_signal_request send_console_signal_request;
@@ -6330,16 +6227,12 @@ union generic_reply
     struct open_console_reply open_console_reply;
     struct attach_console_reply attach_console_reply;
     struct get_console_wait_event_reply get_console_wait_event_reply;
-    struct get_console_mode_reply get_console_mode_reply;
-    struct set_console_mode_reply set_console_mode_reply;
     struct set_console_input_info_reply set_console_input_info_reply;
     struct get_console_input_info_reply get_console_input_info_reply;
     struct append_console_input_history_reply append_console_input_history_reply;
     struct get_console_input_history_reply get_console_input_history_reply;
     struct create_console_output_reply create_console_output_reply;
-    struct set_console_output_info_reply set_console_output_info_reply;
     struct write_console_output_reply write_console_output_reply;
-    struct fill_console_output_reply fill_console_output_reply;
     struct read_console_output_reply read_console_output_reply;
     struct move_console_output_reply move_console_output_reply;
     struct send_console_signal_reply send_console_signal_reply;
@@ -6559,7 +6452,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 622
+#define SERVER_PROTOCOL_VERSION 626
 
 /* ### protocol_version end ### */
 

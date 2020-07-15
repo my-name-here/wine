@@ -533,9 +533,11 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result )
         break;
     case APC_CREATE_THREAD:
     {
-        PS_ATTRIBUTE_LIST attr = { sizeof(attr) };
+        ULONG_PTR buffer[offsetof( PS_ATTRIBUTE_LIST, Attributes[2] ) / sizeof(ULONG_PTR)];
+        PS_ATTRIBUTE_LIST *attr = (PS_ATTRIBUTE_LIST *)buffer;
         CLIENT_ID id;
         HANDLE handle;
+        TEB *teb;
         SIZE_T reserve = call->create_thread.reserve;
         SIZE_T commit = call->create_thread.commit;
         void *func = wine_server_get_ptr( call->create_thread.func );
@@ -545,16 +547,23 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result )
         if (reserve == call->create_thread.reserve && commit == call->create_thread.commit &&
             (ULONG_PTR)func == call->create_thread.func && (ULONG_PTR)arg == call->create_thread.arg)
         {
-            attr.Attributes[0].Attribute = PS_ATTRIBUTE_CLIENT_ID;
-            attr.Attributes[0].Size      = sizeof(id);
-            attr.Attributes[0].ValuePtr  = &id;
+            attr->TotalLength = sizeof(buffer);
+            attr->Attributes[0].Attribute    = PS_ATTRIBUTE_CLIENT_ID;
+            attr->Attributes[0].Size         = sizeof(id);
+            attr->Attributes[0].ValuePtr     = &id;
+            attr->Attributes[0].ReturnLength = NULL;
+            attr->Attributes[1].Attribute    = PS_ATTRIBUTE_TEB_ADDRESS;
+            attr->Attributes[1].Size         = sizeof(teb);
+            attr->Attributes[1].ValuePtr     = &teb;
+            attr->Attributes[1].ReturnLength = NULL;
             result->create_thread.status = NtCreateThreadEx( &handle, THREAD_ALL_ACCESS, NULL,
                                                              NtCurrentProcess(), func, arg,
                                                              call->create_thread.flags, 0,
-                                                             commit, reserve, &attr );
+                                                             commit, reserve, attr );
             result->create_thread.handle = wine_server_obj_handle( handle );
             result->create_thread.pid = HandleToULong(id.UniqueProcess);
             result->create_thread.tid = HandleToULong(id.UniqueThread);
+            result->create_thread.teb = wine_server_client_ptr( teb );
         }
         else result->create_thread.status = STATUS_INVALID_PARAMETER;
         break;
@@ -581,7 +590,7 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result )
  *              server_select
  */
 unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT flags,
-                            timeout_t abs_timeout, CONTEXT *context, RTL_CRITICAL_SECTION *cs,
+                            timeout_t abs_timeout, CONTEXT *context, pthread_mutex_t *mutex,
                             user_apc_t *user_apc )
 {
     unsigned int ret;
@@ -640,10 +649,10 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
                 size = offsetof( select_op_t, signal_and_wait.signal );
         }
         pthread_sigmask( SIG_SETMASK, &old_set, NULL );
-        if (cs)
+        if (mutex)
         {
-            RtlLeaveCriticalSection( cs );
-            cs = NULL;
+            pthread_mutex_unlock( mutex );
+            mutex = NULL;
         }
         if (ret != STATUS_PENDING) break;
 
@@ -1454,7 +1463,7 @@ void server_init_process(void)
 void CDECL server_init_process_done( void *relay )
 {
     PEB *peb = NtCurrentTeb()->Peb;
-    IMAGE_NT_HEADERS *nt = RtlImageNtHeader( peb->ImageBaseAddress );
+    IMAGE_NT_HEADERS *nt = get_exe_nt_header();
     void *entry = (char *)peb->ImageBaseAddress + nt->OptionalHeader.AddressOfEntryPoint;
     NTSTATUS status;
     int suspend;

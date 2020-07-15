@@ -368,13 +368,6 @@ typedef union
     struct winevent_msg_data winevent;
 } message_data_t;
 
-/* structure for console char/attribute info */
-typedef struct
-{
-    WCHAR          ch;
-    unsigned short attr;
-} char_info_t;
-
 /* structure returned in filesystem events */
 struct filesystem_event
 {
@@ -663,6 +656,7 @@ typedef union
         unsigned int     status;    /* status returned by call */
         process_id_t     pid;       /* process id */
         thread_id_t      tid;       /* thread id */
+        client_ptr_t     teb;       /* thread teb (in process address space) */
         obj_handle_t     handle;    /* handle to new thread */
     } create_thread;
     struct
@@ -1501,20 +1495,6 @@ enum server_fd_type
     obj_handle_t event;
 @END
 
-/* Get a console mode (input or output) */
-@REQ(get_console_mode)
-    obj_handle_t handle;        /* handle to the console */
-@REPLY
-    int          mode;          /* console mode */
-@END
-
-
-/* Set a console mode (input or output) */
-@REQ(set_console_mode)
-    obj_handle_t handle;        /* handle to the console */
-    int          mode;          /* console mode */
-@END
-
 
 /* Set info about a console (input only) */
 @REQ(set_console_input_info)
@@ -1583,42 +1563,6 @@ enum server_fd_type
 @END
 
 
-/* Set info about a console (output only) */
-@REQ(set_console_output_info)
-    obj_handle_t handle;        /* handle to the console */
-    int          mask;          /* setting mask (see below) */
-    short int    cursor_size;   /* size of cursor (percentage filled) */
-    short int    cursor_visible;/* cursor visibility flag */
-    short int    cursor_x;      /* position of cursor (x, y) */
-    short int    cursor_y;
-    short int    width;         /* width of the screen buffer */
-    short int    height;        /* height of the screen buffer */
-    short int    attr;          /* default fill attributes (screen colors) */
-    short int    popup_attr;    /* pop-up color attributes */
-    short int    win_left;      /* window actually displayed by renderer */
-    short int    win_top;       /* the rect area is expressed within the */
-    short int    win_right;     /* boundaries of the screen buffer */
-    short int    win_bottom;
-    short int    max_width;     /* maximum size (width x height) for the window */
-    short int    max_height;
-    short int    font_width;    /* font size (width x height) */
-    short int    font_height;
-    short int    font_weight;   /* font weight */
-    short int    font_pitch_family; /* font pitch & family */
-    VARARG(colors,uints,64);    /* color table */
-    VARARG(face_name,unicode_str);  /* font face name */
-@END
-#define SET_CONSOLE_OUTPUT_INFO_CURSOR_GEOM     0x0001
-#define SET_CONSOLE_OUTPUT_INFO_CURSOR_POS      0x0002
-#define SET_CONSOLE_OUTPUT_INFO_SIZE            0x0004
-#define SET_CONSOLE_OUTPUT_INFO_ATTR            0x0008
-#define SET_CONSOLE_OUTPUT_INFO_DISPLAY_WINDOW  0x0010
-#define SET_CONSOLE_OUTPUT_INFO_MAX_SIZE        0x0020
-#define SET_CONSOLE_OUTPUT_INFO_FONT            0x0040
-#define SET_CONSOLE_OUTPUT_INFO_COLORTABLE      0x0080
-#define SET_CONSOLE_OUTPUT_INFO_POPUP_ATTR      0x0100
-
-
 /* write data (chars and/or attributes) in a screen buffer */
 @REQ(write_console_output)
     obj_handle_t handle;        /* handle to the console output */
@@ -1639,20 +1583,6 @@ enum char_info_mode
     CHAR_INFO_MODE_TEXTATTR,    /* both characters and attributes */
     CHAR_INFO_MODE_TEXTSTDATTR  /* characters but use standard attributes */
 };
-
-
-/* fill a screen buffer with constant data (chars and/or attributes) */
-@REQ(fill_console_output)
-    obj_handle_t handle;        /* handle to the console output */
-    int          x;             /* position where to start writing */
-    int          y;
-    int          mode;          /* char info mode */
-    int          count;         /* number to write */
-    int          wrap;          /* wrap around at end of line? */
-    char_info_t  data;          /* data to write */
-@REPLY
-    int          written;       /* number of char infos actually written */
-@END
 
 
 /* read data (chars and/or attributes) from a screen buffer */
