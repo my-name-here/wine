@@ -363,24 +363,6 @@ void WINAPI RtlTimeToElapsedTimeFields( const LARGE_INTEGER *Time, PTIME_FIELDS 
 }
 
 /***********************************************************************
- *       NtQuerySystemTime [NTDLL.@]
- *       ZwQuerySystemTime [NTDLL.@]
- *
- * Get the current system time.
- *
- * PARAMS
- *   time [O] Destination for the current system time.
- *
- * RETURNS
- *   Success: STATUS_SUCCESS.
- *   Failure: An NTSTATUS error code indicating the problem.
- */
-NTSTATUS WINAPI NtQuerySystemTime( LARGE_INTEGER *time )
-{
-    return unix_funcs->NtQuerySystemTime( time );
-}
-
-/***********************************************************************
  *       RtlGetSystemTimePrecise [NTDLL.@]
  *
  * Get a more accurate current system time.
@@ -394,30 +376,11 @@ LONGLONG WINAPI RtlGetSystemTimePrecise( void )
 }
 
 /******************************************************************************
- *  NtQueryPerformanceCounter	[NTDLL.@]
- */
-NTSTATUS WINAPI NtQueryPerformanceCounter( LARGE_INTEGER *counter, LARGE_INTEGER *frequency )
-{
-    NTSTATUS status;
-
-    __TRY
-    {
-        status = unix_funcs->NtQueryPerformanceCounter( counter, frequency );
-    }
-    __EXCEPT_PAGE_FAULT
-    {
-        return STATUS_ACCESS_VIOLATION;
-    }
-    __ENDTRY
-    return status;
-}
-
-/******************************************************************************
  *  RtlQueryPerformanceCounter   [NTDLL.@]
  */
 BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter )
 {
-    unix_funcs->NtQueryPerformanceCounter( counter, NULL );
+    NtQueryPerformanceCounter( counter, NULL );
     return TRUE;
 }
 
@@ -490,15 +453,6 @@ NTSTATUS WINAPI RtlQueryDynamicTimeZoneInformation(RTL_DYNAMIC_TIME_ZONE_INFORMA
 NTSTATUS WINAPI RtlSetTimeZoneInformation( const RTL_TIME_ZONE_INFORMATION *tzinfo )
 {
     return STATUS_PRIVILEGE_NOT_HELD;
-}
-
-/***********************************************************************
- *        NtSetSystemTime [NTDLL.@]
- *        ZwSetSystemTime [NTDLL.@]
- */
-NTSTATUS WINAPI NtSetSystemTime(const LARGE_INTEGER *new, LARGE_INTEGER *old )
-{
-    return unix_funcs->NtSetSystemTime( new, old );
 }
 
 /***********************************************************************

@@ -191,6 +191,9 @@ struct filter_graph
     struct list filters;
     unsigned int name_index;
 
+    OAFilterState state;
+    TP_WORK *async_run_work;
+
     IReferenceClock *refClock;
     IBaseFilter *refClockProvider;
     EventsQueue evqueue;
@@ -202,7 +205,6 @@ struct filter_graph
     int HandleEcComplete;
     int HandleEcRepaint;
     int HandleEcClockChanged;
-    OAFilterState state;
     CRITICAL_SECTION cs;
     ITF_CACHE_ENTRY ItfCacheEntries[MAX_ITF_CACHE_ENTRIES];
     int nItfCacheEntries;
@@ -217,8 +219,11 @@ struct filter_graph
     /* Respectively: the last timestamp at which we started streaming, and the
      * current offset within the stream. */
     REFERENCE_TIME stream_start, stream_elapsed;
-
+    REFERENCE_TIME stream_stop;
     LONGLONG current_pos;
+
+    unsigned int needs_async_run : 1;
+    unsigned int got_ec_complete : 1;
 };
 
 struct enum_filters
@@ -1719,16 +1724,190 @@ static HRESULT WINAPI MediaControl_Invoke(IMediaControl *iface, DISPID dispIdMem
     return S_OK;
 }
 
+static void update_render_count(struct filter_graph *graph)
+{
+    /* Some filters (e.g. MediaStreamFilter) can become renderers when they are
+     * already in the graph. */
+    struct filter *filter;
+    graph->nRenderers = 0;
+    LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
+    {
+        if (is_renderer(filter))
+            ++graph->nRenderers;
+    }
+}
+
+/* Perform the paused -> running transition. The caller must hold graph->cs. */
+static HRESULT graph_start(struct filter_graph *graph, REFERENCE_TIME stream_start)
+{
+    REFERENCE_TIME stream_stop;
+    struct filter *filter;
+    HRESULT hr = S_OK;
+
+    graph->EcCompleteCount = 0;
+    update_render_count(graph);
+
+    if (graph->defaultclock && !graph->refClock)
+        IFilterGraph2_SetDefaultSyncSource(&graph->IFilterGraph2_iface);
+
+    if (!stream_start && graph->refClock)
+    {
+        IReferenceClock_GetTime(graph->refClock, &graph->stream_start);
+        stream_start = graph->stream_start - graph->stream_elapsed;
+        /* Delay presentation time by 200 ms, to give filters time to
+         * initialize. */
+        stream_start += 200 * 10000;
+    }
+
+    if (SUCCEEDED(IMediaSeeking_GetStopPosition(&graph->IMediaSeeking_iface, &stream_stop)))
+        graph->stream_stop = stream_stop;
+
+    LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
+    {
+        HRESULT filter_hr = IBaseFilter_Run(filter->filter, stream_start);
+        if (hr == S_OK)
+            hr = filter_hr;
+        TRACE("Filter %p returned %#x.\n", filter->filter, filter_hr);
+    }
+
+    if (FAILED(hr))
+        WARN("Failed to start stream, hr %#x.\n", hr);
+
+    return hr;
+}
+
+static void CALLBACK async_run_cb(TP_CALLBACK_INSTANCE *instance, void *context, TP_WORK *work)
+{
+    struct filter_graph *graph = context;
+    struct filter *filter;
+    FILTER_STATE state;
+    HRESULT hr;
+
+    TRACE("Performing asynchronous state change.\n");
+
+    /* We can't just call GetState(), since that will return State_Running and
+     * VFW_S_STATE_INTERMEDIATE regardless of whether we're done pausing yet.
+     * Instead replicate it here. */
+
+    for (;;)
+    {
+        IBaseFilter *async_filter = NULL;
+
+        hr = S_OK;
+
+        EnterCriticalSection(&graph->cs);
+
+        if (!graph->needs_async_run)
+            break;
+
+        LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
+        {
+            hr = IBaseFilter_GetState(filter->filter, 0, &state);
+
+            if (hr == VFW_S_STATE_INTERMEDIATE)
+                async_filter = filter->filter;
+
+            if (SUCCEEDED(hr) && state != State_Paused)
+                ERR("Filter %p reported incorrect state %u.\n", filter->filter, state);
+
+            if (hr != S_OK)
+                break;
+        }
+
+        if (hr != VFW_S_STATE_INTERMEDIATE)
+            break;
+
+        LeaveCriticalSection(&graph->cs);
+
+        IBaseFilter_GetState(async_filter, 10, &state);
+    }
+
+    if (hr == S_OK && graph->needs_async_run)
+    {
+        sort_filters(graph);
+        graph_start(graph, 0);
+        graph->needs_async_run = 0;
+    }
+
+    LeaveCriticalSection(&graph->cs);
+    IUnknown_Release(graph->outer_unk);
+}
+
 static HRESULT WINAPI MediaControl_Run(IMediaControl *iface)
 {
     struct filter_graph *graph = impl_from_IMediaControl(iface);
+    BOOL need_async_run = TRUE;
+    struct filter *filter;
+    FILTER_STATE state;
+    HRESULT hr = S_OK;
 
-    return IMediaFilter_Run(&graph->IMediaFilter_iface, 0);
+    TRACE("graph %p.\n", graph);
+
+    EnterCriticalSection(&graph->cs);
+
+    if (graph->state == State_Running)
+    {
+        LeaveCriticalSection(&graph->cs);
+        return S_OK;
+    }
+
+    sort_filters(graph);
+    update_render_count(graph);
+
+    if (graph->state == State_Stopped)
+    {
+        if (graph->defaultclock && !graph->refClock)
+            IFilterGraph2_SetDefaultSyncSource(&graph->IFilterGraph2_iface);
+
+        LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
+        {
+            HRESULT filter_hr = IBaseFilter_Pause(filter->filter);
+            if (hr == S_OK)
+                hr = filter_hr;
+            TRACE("Filter %p returned %#x.\n", filter->filter, filter_hr);
+
+            /* If a filter returns VFW_S_CANT_CUE, we shouldn't wait for a
+             * paused state. */
+            filter_hr = IBaseFilter_GetState(filter->filter, 0, &state);
+            if (filter_hr != S_OK && filter_hr != VFW_S_STATE_INTERMEDIATE)
+                need_async_run = FALSE;
+        }
+
+        if (FAILED(hr))
+        {
+            LeaveCriticalSection(&graph->cs);
+            WARN("Failed to pause, hr %#x.\n", hr);
+            return hr;
+        }
+    }
+
+    graph->state = State_Running;
+
+    if (SUCCEEDED(hr))
+    {
+        if (hr != S_OK && need_async_run)
+        {
+            if (!graph->async_run_work)
+                graph->async_run_work = CreateThreadpoolWork(async_run_cb, graph, NULL);
+            graph->needs_async_run = 1;
+            IUnknown_AddRef(graph->outer_unk);
+            SubmitThreadpoolWork(graph->async_run_work);
+        }
+        else
+        {
+            graph_start(graph, 0);
+        }
+    }
+
+    LeaveCriticalSection(&graph->cs);
+    return hr;
 }
 
 static HRESULT WINAPI MediaControl_Pause(IMediaControl *iface)
 {
     struct filter_graph *graph = impl_from_IMediaControl(iface);
+
+    TRACE("graph %p.\n", graph);
 
     return IMediaFilter_Pause(&graph->IMediaFilter_iface);
 }
@@ -1737,12 +1916,16 @@ static HRESULT WINAPI MediaControl_Stop(IMediaControl *iface)
 {
     struct filter_graph *graph = impl_from_IMediaControl(iface);
 
+    TRACE("graph %p.\n", graph);
+
     return IMediaFilter_Stop(&graph->IMediaFilter_iface);
 }
 
 static HRESULT WINAPI MediaControl_GetState(IMediaControl *iface, LONG timeout, OAFilterState *state)
 {
     struct filter_graph *graph = impl_from_IMediaControl(iface);
+
+    TRACE("graph %p, timeout %u, state %p.\n", graph, timeout, state);
 
     if (timeout < 0) timeout = INFINITE;
 
@@ -2144,7 +2327,11 @@ static HRESULT WINAPI MediaSeeking_GetCurrentPosition(IMediaSeeking *iface, LONG
 
     EnterCriticalSection(&graph->cs);
 
-    if (graph->state == State_Running && graph->refClock)
+    if (graph->got_ec_complete)
+    {
+        ret = graph->stream_stop;
+    }
+    else if (graph->state == State_Running && graph->refClock)
     {
         REFERENCE_TIME time;
         IReferenceClock_GetTime(graph->refClock, &time);
@@ -2211,7 +2398,7 @@ static HRESULT WINAPI MediaSeeking_SetPositions(IMediaSeeking *iface, LONGLONG *
     EnterCriticalSection(&graph->cs);
 
     state = graph->state;
-    if (state == State_Running)
+    if (state == State_Running && !graph->needs_async_run)
         IMediaControl_Pause(&graph->IMediaControl_iface);
 
     LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
@@ -2247,23 +2434,25 @@ static HRESULT WINAPI MediaSeeking_SetPositions(IMediaSeeking *iface, LONGLONG *
         graph->stream_elapsed = 0;
     }
 
-    if (state == State_Running)
+    if (state == State_Running && !graph->needs_async_run)
         IMediaControl_Run(&graph->IMediaControl_iface);
 
     LeaveCriticalSection(&graph->cs);
     return hr;
 }
 
-static HRESULT WINAPI MediaSeeking_GetPositions(IMediaSeeking *iface, LONGLONG *pCurrent,
-        LONGLONG *pStop)
+static HRESULT WINAPI MediaSeeking_GetPositions(IMediaSeeking *iface,
+        LONGLONG *current, LONGLONG *stop)
 {
-    struct filter_graph *This = impl_from_IMediaSeeking(iface);
-    HRESULT hr;
+    struct filter_graph *graph = impl_from_IMediaSeeking(iface);
+    HRESULT hr = S_OK;
 
-    TRACE("(%p/%p)->(%p, %p)\n", This, iface, pCurrent, pStop);
-    hr = IMediaSeeking_GetCurrentPosition(iface, pCurrent);
-    if (SUCCEEDED(hr))
-        hr = IMediaSeeking_GetStopPosition(iface, pStop);
+    TRACE("graph %p, current %p, stop %p.\n", graph, current, stop);
+
+    if (current)
+        hr = IMediaSeeking_GetCurrentPosition(iface, current);
+    if (SUCCEEDED(hr) && stop)
+        hr = IMediaSeeking_GetStopPosition(iface, stop);
 
     return hr;
 }
@@ -4770,6 +4959,7 @@ static HRESULT WINAPI MediaFilter_Stop(IMediaFilter *iface)
     struct filter_graph *graph = impl_from_IMediaFilter(iface);
     HRESULT hr = S_OK, filter_hr;
     struct filter *filter;
+    TP_WORK *work;
 
     TRACE("graph %p.\n", graph);
 
@@ -4801,26 +4991,21 @@ static HRESULT WINAPI MediaFilter_Stop(IMediaFilter *iface)
     }
 
     graph->state = State_Stopped;
+    graph->needs_async_run = 0;
+    work = graph->async_run_work;
+    graph->got_ec_complete = 0;
 
     /* Update the current position, probably to synchronize multiple streams. */
     IMediaSeeking_SetPositions(&graph->IMediaSeeking_iface, &graph->current_pos,
             AM_SEEKING_AbsolutePositioning, NULL, AM_SEEKING_NoPositioning);
 
     LeaveCriticalSection(&graph->cs);
-    return hr;
-}
 
-static void update_render_count(struct filter_graph *graph)
-{
-    /* Some filters (e.g. MediaStreamFilter) can become renderers when they are
-     * already in the graph. */
-    struct filter *filter;
-    graph->nRenderers = 0;
-    LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
-    {
-        if (is_renderer(filter))
-            ++graph->nRenderers;
-    }
+    /* Don't cancel the callback; it's holding a reference to the graph. */
+    if (work)
+        WaitForThreadpoolWorkCallbacks(work, FALSE);
+
+    return hr;
 }
 
 static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
@@ -4828,6 +5013,7 @@ static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
     struct filter_graph *graph = impl_from_IMediaFilter(iface);
     HRESULT hr = S_OK, filter_hr;
     struct filter *filter;
+    TP_WORK *work;
 
     TRACE("graph %p.\n", graph);
 
@@ -4861,17 +5047,22 @@ static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
     }
 
     graph->state = State_Paused;
+    graph->needs_async_run = 0;
+    work = graph->async_run_work;
 
     LeaveCriticalSection(&graph->cs);
+
+    /* Don't cancel the callback; it's holding a reference to the graph. */
+    if (work)
+        WaitForThreadpoolWorkCallbacks(work, FALSE);
+
     return hr;
 }
 
 static HRESULT WINAPI MediaFilter_Run(IMediaFilter *iface, REFERENCE_TIME start)
 {
     struct filter_graph *graph = impl_from_IMediaFilter(iface);
-    REFERENCE_TIME stream_start = start;
-    HRESULT hr = S_OK, filter_hr;
-    struct filter *filter;
+    HRESULT hr;
 
     TRACE("graph %p, start %s.\n", graph, debugstr_time(start));
 
@@ -4882,30 +5073,13 @@ static HRESULT WINAPI MediaFilter_Run(IMediaFilter *iface, REFERENCE_TIME start)
         LeaveCriticalSection(&graph->cs);
         return S_OK;
     }
-    graph->EcCompleteCount = 0;
 
     sort_filters(graph);
-    update_render_count(graph);
 
-    if (graph->defaultclock && !graph->refClock)
-        IFilterGraph2_SetDefaultSyncSource(&graph->IFilterGraph2_iface);
-
-    if (!start && graph->refClock)
-    {
-        IReferenceClock_GetTime(graph->refClock, &graph->stream_start);
-        stream_start = graph->stream_start - graph->stream_elapsed;
-        if (graph->state == State_Stopped)
-            stream_start += 500000;
-    }
-
-    LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
-    {
-        filter_hr = IBaseFilter_Run(filter->filter, stream_start);
-        if (hr == S_OK)
-            hr = filter_hr;
-    }
+    hr = graph_start(graph, start);
 
     graph->state = State_Running;
+    graph->needs_async_run = 0;
 
     LeaveCriticalSection(&graph->cs);
     return hr;
@@ -4915,42 +5089,70 @@ static HRESULT WINAPI MediaFilter_GetState(IMediaFilter *iface, DWORD timeout, F
 {
     struct filter_graph *graph = impl_from_IMediaFilter(iface);
     DWORD end = GetTickCount() + timeout;
-    HRESULT hr = S_OK, filter_hr;
-    struct filter *filter;
+    FILTER_STATE expect_state;
+    HRESULT hr;
 
     TRACE("graph %p, timeout %u, state %p.\n", graph, timeout, state);
 
     if (!state)
         return E_POINTER;
 
+    /* Thread safety is a little tricky here. GetState() shouldn't block other
+     * functions from being called on the filter graph. However, we can't just
+     * call IBaseFilter::GetState() in one loop and drop the lock on every
+     * iteration, since the filter list might change beneath us. So instead we
+     * do what native does, and poll for it every 10 ms. */
+
     EnterCriticalSection(&graph->cs);
-
-    sort_filters(graph);
-
     *state = graph->state;
+    expect_state = graph->needs_async_run ? State_Paused : graph->state;
 
-    LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
+    for (;;)
     {
+        IBaseFilter *async_filter = NULL;
         FILTER_STATE filter_state;
-        int wait;
+        struct filter *filter;
 
-        if (timeout == INFINITE)
-            wait = INFINITE;
-        else if (!timeout)
-            wait = 0;
-        else
-            wait = max(end - GetTickCount(), 0);
+        hr = S_OK;
 
-        filter_hr = IBaseFilter_GetState(filter->filter, wait, &filter_state);
-        if (hr == S_OK && filter_hr == VFW_S_STATE_INTERMEDIATE)
-            hr = VFW_S_STATE_INTERMEDIATE;
-        else if (filter_hr != S_OK && filter_hr != VFW_S_STATE_INTERMEDIATE)
-            hr = filter_hr;
-        if (filter_state != graph->state)
-            ERR("Filter %p reported incorrect state %u.\n", filter->filter, filter_state);
+        LIST_FOR_EACH_ENTRY(filter, &graph->filters, struct filter, entry)
+        {
+            HRESULT filter_hr = IBaseFilter_GetState(filter->filter, 0, &filter_state);
+
+            TRACE("Filter %p returned hr %#x, state %u.\n", filter->filter, filter_hr, filter_state);
+
+            if (filter_hr == VFW_S_STATE_INTERMEDIATE)
+                async_filter = filter->filter;
+
+            if (hr == S_OK && filter_hr == VFW_S_STATE_INTERMEDIATE)
+                hr = VFW_S_STATE_INTERMEDIATE;
+            else if (filter_hr != S_OK && filter_hr != VFW_S_STATE_INTERMEDIATE)
+                hr = filter_hr;
+
+            if (hr == S_OK && filter_state == State_Paused && graph->state != State_Paused)
+            {
+                async_filter = filter->filter;
+                hr = VFW_S_STATE_INTERMEDIATE;
+            }
+            else if (filter_state != graph->state && filter_state != State_Paused)
+                hr = E_FAIL;
+
+            if (filter_state != expect_state)
+                ERR("Filter %p reported incorrect state %u (expected %u).\n",
+                        filter->filter, filter_state, expect_state);
+        }
+
+        LeaveCriticalSection(&graph->cs);
+
+        if (hr != VFW_S_STATE_INTERMEDIATE || (timeout != INFINITE && GetTickCount() >= end))
+            break;
+
+        IBaseFilter_GetState(async_filter, 10, &filter_state);
+
+        EnterCriticalSection(&graph->cs);
     }
 
-    LeaveCriticalSection(&graph->cs);
+    TRACE("Returning %#x, state %u.\n", hr, *state);
     return hr;
 }
 
@@ -5091,6 +5293,7 @@ static HRESULT WINAPI MediaEventSink_Notify(IMediaEventSink *iface, LONG EventCo
                 PostMessageW(This->notif.hWnd, This->notif.msg, 0, This->notif.instance);
             }
             This->CompletionStatus = EC_COMPLETE;
+            This->got_ec_complete = 1;
             SetEvent(This->hEventCompletion);
         }
     }

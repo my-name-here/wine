@@ -311,7 +311,7 @@ __ASM_GLOBAL_FUNC( __chkstk, "ret" );
 __ASM_GLOBAL_FUNC( RtlCaptureContext,
                    "pushfq\n\t"
                    __ASM_CFI(".cfi_adjust_cfa_offset 8\n\t")
-                   "movl $0x001000f,0x30(%rcx)\n\t" /* context->ContextFlags */
+                   "movl $0x10000f,0x30(%rcx)\n\t"  /* context->ContextFlags */
                    "stmxcsr 0x34(%rcx)\n\t"         /* context->MxCsr */
                    "movw %cs,0x38(%rcx)\n\t"        /* context->SegCs */
                    "movw %ds,0x3a(%rcx)\n\t"        /* context->SegDs */
@@ -585,22 +585,22 @@ __ASM_GLOBAL_FUNC( KiUserExceptionDispatcher,
                   "mov %rbp,-0x10(%rcx)\n\t"
                   "mov %rdi,-0x18(%rcx)\n\t"
                   "mov %rsi,-0x20(%rcx)\n\t"
-                  "lea -0x10(%rcx),%rbp\n\t"
+                  "lea -0x20(%rcx),%rbp\n\t"
                   "mov %rsp,%rdx\n\t" /* context */
                   "lea 0x4f0(%rsp),%rcx\n\t" /* rec */
                   __ASM_SEH(".seh_pushreg %rbp\n\t")
-                  __ASM_SEH(".seh_setframe %rbp,0\n\t")
                   __ASM_SEH(".seh_pushreg %rdi\n\t")
                   __ASM_SEH(".seh_pushreg %rsi\n\t")
+                  __ASM_SEH(".seh_setframe %rbp,0\n\t")
                   __ASM_SEH(".seh_endprologue\n\t")
 
                   __ASM_CFI(".cfi_signal_frame\n\t")
-                  __ASM_CFI(".cfi_adjust_cfa_offset 0x10\n\t")
-                  __ASM_CFI(".cfi_def_cfa %rbp,0x10\n\t")
-                  __ASM_CFI(".cfi_rel_offset %rip,0x8\n\t")
-                  __ASM_CFI(".cfi_rel_offset %rbp,0x0\n\t")
-                  __ASM_CFI(".cfi_rel_offset %rdi,-0x8\n\t")
-                  __ASM_CFI(".cfi_rel_offset %rsi,-0x10\n\t")
+                  __ASM_CFI(".cfi_adjust_cfa_offset 0x20\n\t")
+                  __ASM_CFI(".cfi_def_cfa %rbp,0x20\n\t")
+                  __ASM_CFI(".cfi_rel_offset %rip,0x18\n\t")
+                  __ASM_CFI(".cfi_rel_offset %rbp,0x10\n\t")
+                  __ASM_CFI(".cfi_rel_offset %rdi,0x8\n\t")
+                  __ASM_CFI(".cfi_rel_offset %rsi,0\n\t")
                    "call " __ASM_NAME("dispatch_exception") "\n\t"
                   "int3")
 

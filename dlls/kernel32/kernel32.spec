@@ -226,6 +226,7 @@
 @ stdcall -import CloseHandle(long)
 # @ stub ClosePrivateNamespace
 @ stdcall CloseProfileUserMapping()
+@ stdcall -import ClosePseudoConsole(ptr)
 @ stub CloseSystemHandle
 @ stdcall CloseThreadpool(ptr) ntdll.TpReleasePool
 @ stdcall CloseThreadpoolCleanupGroup(ptr) ntdll.TpReleaseCleanupGroup
@@ -316,6 +317,7 @@
 @ stdcall -import CreateProcessInternalW(long wstr wstr ptr ptr long long ptr wstr ptr ptr ptr)
 # @ stub CreateProcessInternalWSecure
 @ stdcall -import CreateProcessW(wstr wstr ptr ptr long long ptr wstr ptr ptr)
+@ stdcall -import CreatePseudoConsole(long long long long ptr)
 @ stdcall -import CreateRemoteThread(long ptr long ptr long long ptr)
 @ stdcall -import CreateRemoteThreadEx(long ptr long ptr ptr long ptr ptr)
 @ stdcall CreateSemaphoreA(ptr long long str)
@@ -1287,6 +1289,7 @@
 @ stdcall RequestWakeupLatency(long)
 @ stdcall -import ResetEvent(long)
 @ stdcall -import ResetWriteWatch(ptr long)
+@ stdcall -import ResizePseudoConsole(ptr long)
 @ stdcall ResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ntdll.LdrResolveDelayLoadedAPI
 @ stdcall -import ResolveLocaleName(wstr ptr long)
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
@@ -1414,7 +1417,7 @@
 @ stdcall -import SetFileTime(long ptr ptr ptr)
 @ stdcall -import SetFileValidData(ptr int64)
 # @ stub SetFirmwareEnvironmentVariableA
-# @ stub SetFirmwareEnvironmentVariableW
+@ stdcall SetFirmwareEnvironmentVariableW(wstr wstr ptr long)
 @ stdcall SetHandleContext(long long)
 @ stdcall SetHandleCount(long)
 @ stdcall -import SetHandleInformation(long long long)

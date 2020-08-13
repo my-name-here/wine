@@ -549,11 +549,13 @@ static HRESULT WINAPI ActiveScript_AddTypeLib(IActiveScript *iface, REFGUID rgui
     return E_NOTIMPL;
 }
 
+static const WCHAR *GetScriptDispatch_expected_name;
 static HRESULT WINAPI ActiveScript_GetScriptDispatch(IActiveScript *iface, LPCOLESTR pstrItemName,
                                                 IDispatch **ppdisp)
 {
     CHECK_EXPECT(GetScriptDispatch);
-    ok(!pstrItemName, "pstrItemName not NULL, got %s.\n", wine_dbgstr_w(pstrItemName));
+    ok(GetScriptDispatch_expected_name ? (pstrItemName && !lstrcmpW(pstrItemName, GetScriptDispatch_expected_name)) : !pstrItemName,
+        "pstrItemName not %s, got %s.\n", wine_dbgstr_w(GetScriptDispatch_expected_name), wine_dbgstr_w(pstrItemName));
 
     *ppdisp = (IDispatch*)&DispatchEx;
 
@@ -2234,6 +2236,7 @@ static void test_IScriptControl_Run(void)
         CHECK_CALLED(QI_IActiveScriptParse);
         CHECK_CALLED(InitNew);
 
+        GetScriptDispatch_expected_name = NULL;
         SET_EXPECT(SetScriptState_STARTED);
         SET_EXPECT(GetScriptDispatch);
         SET_EXPECT(QI_IDispatchEx);
@@ -2307,14 +2310,26 @@ static void test_IScriptControl_Run(void)
 
 static void test_IScriptControl_get_Modules(void)
 {
+    SAFEARRAYBOUND bnd[] = { { 2, 0 }, { 2, 0 } };
+    LONG idx0_0[] = { 0, 0 };
+    LONG idx0_1[] = { 1, 0 };
+    LONG idx1_0[] = { 0, 1 };
+    LONG idx1_1[] = { 1, 1 };
+
+    IEnumVARIANT *enumvar, *enumvar2;
     IScriptModuleCollection *mods;
+    VARIANT var, vars[3];
     IScriptModule *mod;
     IScriptControl *sc;
+    SAFEARRAY *params;
     IUnknown *unknown;
-    VARIANT var;
+    IDispatch *disp;
+    ULONG fetched;
     LONG count;
     HRESULT hr;
+    DISPID id;
     BSTR str;
+    UINT i;
 
     hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
                           &IID_IScriptControl, (void**)&sc);
@@ -2359,6 +2374,16 @@ static void test_IScriptControl_get_Modules(void)
     ok(hr == S_OK, "IScriptModuleCollection_Add failed: 0x%08x.\n", hr);
     IScriptModule_Release(mod);
     SysFreeString(str);
+
+    /* Grab an enumerator before we add another module */
+    hr = IScriptModuleCollection_get__NewEnum(mods, NULL);
+    ok(hr == E_POINTER, "IScriptModuleCollection_get__NewEnum returned: 0x%08x.\n", hr);
+    hr = IScriptModuleCollection_get__NewEnum(mods, &unknown);
+    ok(hr == S_OK, "IScriptModuleCollection_get__NewEnum failed: 0x%08x.\n", hr);
+    hr = IUnknown_QueryInterface(unknown, &IID_IEnumVARIANT, (void**)&enumvar);
+    ok(hr == S_OK, "Failed to query for IEnumVARIANT: 0x%08x.\n", hr);
+    ok((char*)unknown == (char*)enumvar, "unknown and enumvar are not the same (%p vs %p).\n", unknown, enumvar);
+    IUnknown_Release(unknown);
 
     str = SysAllocString(L"some other Module");
     hr = IScriptModuleCollection_Add(mods, str, &var, &mod);
@@ -2428,6 +2453,46 @@ static void test_IScriptControl_get_Modules(void)
     IScriptModule_Release(mod);
     SysFreeString(str);
 
+    /* Test the enumerator, should be updated */
+    fetched = 0xdeadbeef;
+    hr = IEnumVARIANT_Next(enumvar, 0, NULL, NULL);
+    ok(hr == E_POINTER, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Next(enumvar, 0, NULL, &fetched);
+    ok(hr == E_POINTER, "IEnumVARIANT_Next failed: 0x%08x.\n", hr);
+    ok(fetched == 0xdeadbeef, "got %u.\n", fetched);
+    hr = IEnumVARIANT_Next(enumvar, 0, &var, &fetched);
+    ok(hr == S_OK, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+    ok(fetched == 0, "got %u.\n", fetched);
+    hr = IEnumVARIANT_Next(enumvar, 0, &var, NULL);
+    ok(hr == S_OK, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Clone(enumvar, NULL);
+    ok(hr == E_POINTER, "IEnumVARIANT_Clone failed: 0x%08x.\n", hr);
+
+    hr = IEnumVARIANT_Next(enumvar, ARRAY_SIZE(vars), vars, &fetched);
+    ok(hr == S_OK, "IEnumVARIANT_Next failed: 0x%08x.\n", hr);
+    ok(fetched == ARRAY_SIZE(vars), "got %u.\n", fetched);
+    hr = IEnumVARIANT_Next(enumvar, 1, &var, &fetched);
+    ok(hr == S_FALSE, "IEnumVARIANT_Next failed: 0x%08x.\n", hr);
+    ok(fetched == 0, "got %u.\n", fetched);
+    hr = IEnumVARIANT_Skip(enumvar, 0);
+    ok(hr == S_OK, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Skip(enumvar, 1);
+    ok(hr == S_FALSE, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Clone(enumvar, &enumvar2);
+    ok(hr == S_OK, "IEnumVARIANT_Clone failed: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Skip(enumvar2, 1);
+    ok(hr == S_FALSE, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+    IEnumVARIANT_Release(enumvar2);
+
+    for (i = 0; i < ARRAY_SIZE(vars); i++)
+    {
+        ok(V_VT(&vars[i]) == VT_DISPATCH, "V_VT(vars[%u]) = %d.\n", i, V_VT(&vars[i]));
+        hr = IDispatch_QueryInterface(V_DISPATCH(&vars[i]), &IID_IScriptModule, (void**)&mod);
+        ok(hr == S_OK, "Failed to query IScriptModule from vars[%u]: 0x%08x.\n", i, hr);
+        IScriptModule_Release(mod);
+        VariantClear(&vars[i]);
+    }
+
     /* The 'Global' module is the same as the script control */
     str = SysAllocString(L"add(10, 5)");
     hr = IScriptControl_Eval(sc, str, &var);
@@ -2438,6 +2503,86 @@ static void test_IScriptControl_get_Modules(void)
     hr = IScriptControl_Eval(sc, str, &var);
     ok(FAILED(hr), "IScriptControl_Eval succeeded: 0x%08x.\n", hr);
     SysFreeString(str);
+
+    V_VT(&var) = VT_R4;
+    V_R4(&var) = 2.0f;
+    hr = IScriptModuleCollection_get_Item(mods, var, &mod);
+    ok(hr == S_OK, "IScriptModuleCollection_get_Item failed: 0x%08x.\n", hr);
+
+    hr = IScriptModule_get_CodeObject(mod, &disp);
+    ok(hr == S_OK, "IScriptModule_get_CodeObject failed: 0x%08x.\n", hr);
+
+    str = SysAllocString(L"sub");
+    hr = IDispatch_GetIDsOfNames(disp, &IID_NULL, &str, 1, LOCALE_USER_DEFAULT, &id);
+    ok(hr == S_OK, "IDispatch_GetIDsOfNames failed: 0x%08x.\n", hr);
+    ok(id != -1, "Unexpected id %d.\n", id);
+    SysFreeString(str);
+
+    str = SysAllocString(L"add");
+    hr = IDispatch_GetIDsOfNames(disp, &IID_NULL, &str, 1, LOCALE_USER_DEFAULT, &id);
+    ok(hr == DISP_E_UNKNOWNNAME, "IDispatch_GetIDsOfNames returned: 0x%08x.\n", hr);
+    ok(id == -1, "Unexpected id %d.\n", id);
+    SysFreeString(str);
+
+    IDispatch_Release(disp);
+
+    params = SafeArrayCreate(VT_VARIANT, 1, bnd);
+    ok(params != NULL, "Failed to create SafeArray.\n");
+
+    V_VT(&var) = VT_I4;
+    V_I4(&var) = 10;
+    SafeArrayPutElement(params, idx0_0, &var);
+    V_I4(&var) = 3;
+    SafeArrayPutElement(params, idx0_1, &var);
+
+    str = SysAllocString(L"sub");
+    hr = IScriptModule_Run(mod, str, NULL, &var);
+    ok(hr == E_POINTER, "IScriptModule_Run returned: 0x%08x.\n", hr);
+    hr = IScriptModule_Run(mod, str, &params, NULL);
+    ok(hr == E_POINTER, "IScriptModule_Run returned: 0x%08x.\n", hr);
+
+    hr = IScriptControl_Run(sc, str, &params, &var);
+    ok(hr == DISP_E_UNKNOWNNAME, "IScriptControl_Run failed: 0x%08x.\n", hr);
+    hr = IScriptModule_Run(mod, str, &params, &var);
+    ok(hr == S_OK, "IScriptModule_Run failed: 0x%08x.\n", hr);
+    ok((V_VT(&var) == VT_I4) && (V_I4(&var) == 7), "V_VT(var) = %d, V_I4(var) = %d.\n", V_VT(&var), V_I4(&var));
+    SysFreeString(str);
+
+    str = SysAllocString(L"add");
+    hr = IScriptControl_Run(sc, str, &params, &var);
+    ok(hr == S_OK, "IScriptControl_Run failed: 0x%08x.\n", hr);
+    ok((V_VT(&var) == VT_I4) && (V_I4(&var) == 13), "V_VT(var) = %d, V_I4(var) = %d.\n", V_VT(&var), V_I4(&var));
+    hr = IScriptModule_Run(mod, str, &params, &var);
+    ok(hr == DISP_E_UNKNOWNNAME, "IScriptModule_Run failed: 0x%08x.\n", hr);
+    SysFreeString(str);
+
+    SafeArrayDestroy(params);
+    params = SafeArrayCreate(VT_VARIANT, 2, bnd);
+    ok(params != NULL, "Failed to create SafeArray.\n");
+
+    V_VT(&var) = VT_I4;
+    V_I4(&var) = 49;
+    SafeArrayPutElement(params, idx0_0, &var);
+    V_I4(&var) = 7;
+    SafeArrayPutElement(params, idx0_1, &var);
+    V_I4(&var) = 30;
+    SafeArrayPutElement(params, idx1_0, &var);
+    V_I4(&var) = 25;
+    SafeArrayPutElement(params, idx1_1, &var);
+
+    str = SysAllocString(L"sub");
+    hr = IScriptModule_Run(mod, str, &params, &var);
+    ok(hr == S_OK, "IScriptModule_Run failed: 0x%08x.\n", hr);
+    ok((V_VT(&var) == VT_I4) && (V_I4(&var) == 42), "V_VT(var) = %d, V_I4(var) = %d.\n", V_VT(&var), V_I4(&var));
+
+    params->cDims = 0;
+    hr = IScriptModule_Run(mod, str, &params, &var);
+    ok(hr == DISP_E_BADINDEX, "IScriptModule_Run returned: 0x%08x.\n", hr);
+    ok(V_VT(&var) == VT_EMPTY, "V_VT(var) = %d.\n", V_VT(&var));
+    params->cDims = 2;
+    SysFreeString(str);
+
+    IScriptModule_Release(mod);
 
     /* Grab a module ref and change the language to something valid */
     V_VT(&var) = VT_I2;
@@ -2455,6 +2600,8 @@ static void test_IScriptControl_get_Modules(void)
     ok(count == 1, "count is not 1, got %d.\n", count);
     hr = IScriptModule_get_Name(mod, &str);
     ok(hr == E_FAIL, "IScriptModule_get_Name returned: 0x%08x.\n", hr);
+    hr = IScriptModule_get_CodeObject(mod, &disp);
+    ok(hr == E_FAIL, "IScriptModule_get_CodeObject returned: 0x%08x.\n", hr);
     str = SysAllocString(L"function closed() { }\n");
     hr = IScriptModule_AddCode(mod, str);
     ok(hr == E_FAIL, "IScriptModule_AddCode failed: 0x%08x.\n", hr);
@@ -2462,8 +2609,24 @@ static void test_IScriptControl_get_Modules(void)
     str = SysAllocString(L"sub closed\nend sub");
     hr = IScriptModule_AddCode(mod, str);
     ok(hr == E_FAIL, "IScriptModule_AddCode failed: 0x%08x.\n", hr);
-    IScriptModule_Release(mod);
     SysFreeString(str);
+    str = SysAllocString(L"identifier");
+    hr = IScriptModule_Run(mod, str, &params, &var);
+    ok(hr == E_FAIL, "IScriptModule_Run returned: 0x%08x.\n", hr);
+    IScriptModule_Release(mod);
+    SafeArrayDestroy(params);
+    SysFreeString(str);
+
+    /* The enumerator is also invalid */
+    hr = IEnumVARIANT_Reset(enumvar);
+    ok(hr == E_FAIL, "IEnumVARIANT_Skip returned: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Next(enumvar, 1, &var, &fetched);
+    ok(hr == E_FAIL, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Skip(enumvar, 0);
+    ok(hr == E_FAIL, "IEnumVARIANT_Skip returned: 0x%08x.\n", hr);
+    hr = IEnumVARIANT_Clone(enumvar, &enumvar2);
+    ok(hr == E_FAIL, "IEnumVARIANT_Clone returned: 0x%08x.\n", hr);
+    IEnumVARIANT_Release(enumvar);
 
     hr = IScriptControl_put_Language(sc, NULL);
     ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
@@ -2480,6 +2643,8 @@ static void test_IScriptControl_get_Modules(void)
     hr = IScriptModuleCollection_Add(mods, str, &var, &mod);
     ok(hr == E_FAIL, "IScriptModuleCollection_Add returned: 0x%08x.\n", hr);
     SysFreeString(str);
+    hr = IScriptModuleCollection_get__NewEnum(mods, &unknown);
+    ok(hr == E_FAIL, "IScriptModuleCollection_get__NewEnum returned: 0x%08x.\n", hr);
 
     IScriptModuleCollection_Release(mods);
     hr = IScriptControl_get_Modules(sc, &mods);
@@ -2562,14 +2727,23 @@ static void test_IScriptControl_get_Modules(void)
         ok(unknown == (IUnknown*)&testdisp, "Unexpected IUnknown for the item: %p.\n", unknown);
         IUnknown_Release(unknown);
 
+        GetScriptDispatch_expected_name = str;
         SET_EXPECT(SetScriptState_STARTED);
+        SET_EXPECT(GetScriptDispatch);
+        hr = IScriptModule_get_CodeObject(mod, &disp);
+        ok(hr == S_OK, "IScriptModule_get_CodeObject failed: 0x%08x.\n", hr);
+        ok(disp == (IDispatch*)&DispatchEx, "Unexpected code object %p.\n", disp);
+        CHECK_CALLED(GetScriptDispatch);
+        CHECK_CALLED(SetScriptState_STARTED);
+        GetScriptDispatch_expected_name = NULL;
+        IDispatch_Release(disp);
+
         SET_EXPECT(ParseScriptText);
         parse_item_name = str;
         parse_flags = SCRIPTTEXT_ISVISIBLE;
         code_str = SysAllocString(L"some code");
         hr = IScriptModule_AddCode(mod, code_str);
         ok(hr == S_OK, "IScriptControl_AddCode failed: 0x%08x.\n", hr);
-        CHECK_CALLED(SetScriptState_STARTED);
         CHECK_CALLED(ParseScriptText);
         SysFreeString(code_str);
         SysFreeString(str);
@@ -2640,6 +2814,138 @@ static void test_IScriptControl_get_Modules(void)
         SET_EXPECT(Close);
         IScriptModule_Release(mod);
         CHECK_CALLED(Close);
+
+        /* Hold an enumerator while releasing the script control */
+        hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                              &IID_IScriptControl, (void**)&sc);
+        ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+        SET_EXPECT(CreateInstance);
+        SET_EXPECT(SetInterfaceSafetyOptions);
+        SET_EXPECT(SetScriptSite);
+        SET_EXPECT(QI_IActiveScriptParse);
+        SET_EXPECT(InitNew);
+        str = SysAllocString(L"testscript");
+        hr = IScriptControl_put_Language(sc, str);
+        ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+        SysFreeString(str);
+        CHECK_CALLED(CreateInstance);
+        CHECK_CALLED(SetInterfaceSafetyOptions);
+        CHECK_CALLED(SetScriptSite);
+        CHECK_CALLED(QI_IActiveScriptParse);
+        CHECK_CALLED(InitNew);
+
+        hr = IScriptControl_get_Modules(sc, &mods);
+        ok(hr == S_OK, "IScriptControl_get_Modules failed: 0x%08x.\n", hr);
+        IScriptControl_Release(sc);
+
+        SET_EXPECT(AddNamedItem);
+        str = SysAllocString(L"bar");
+        AddNamedItem_expected_name = str;
+        AddNamedItem_expected_flags = SCRIPTITEM_CODEONLY;
+        V_VT(&var) = VT_DISPATCH;
+        V_DISPATCH(&var) = NULL;
+        hr = IScriptModuleCollection_Add(mods, str, &var, &mod);
+        ok(hr == S_OK, "IScriptModuleCollection_Add failed: 0x%08x.\n", hr);
+        IScriptModule_Release(mod);
+        VariantClear(&var);
+        SysFreeString(str);
+        CHECK_CALLED(AddNamedItem);
+
+        hr = IScriptModuleCollection_get__NewEnum(mods, &unknown);
+        ok(hr == S_OK, "IScriptModuleCollection_get__NewEnum failed: 0x%08x.\n", hr);
+        hr = IUnknown_QueryInterface(unknown, &IID_IEnumVARIANT, (void**)&enumvar);
+        ok(hr == S_OK, "Failed to query for IEnumVARIANT: 0x%08x.\n", hr);
+        IUnknown_Release(unknown);
+
+        IScriptModuleCollection_Release(mods);
+        IActiveScriptSite_Release(site);
+
+        hr = IEnumVARIANT_Next(enumvar, ARRAY_SIZE(vars), vars, &fetched);
+        ok(hr == S_FALSE, "IEnumVARIANT_Next failed: 0x%08x.\n", hr);
+        ok(fetched == 2, "got %u.\n", fetched);
+        for (i = 0; i < fetched; i++)
+        {
+            ok(V_VT(&vars[i]) == VT_DISPATCH, "V_VT(vars[%u]) = %d.\n", i, V_VT(&vars[i]));
+            hr = IDispatch_QueryInterface(V_DISPATCH(&vars[i]), &IID_IScriptModule, (void**)&mod);
+            ok(hr == S_OK, "Failed to query IScriptModule from vars[%u]: 0x%08x.\n", i, hr);
+            hr = IScriptModule_get_Name(mod, &str);
+            ok(hr == S_OK, "IScriptModule_get_Name failed for vars[%u]: 0x%08x.\n", i, hr);
+            ok(!lstrcmpW(str, i ? L"bar" : L"Global"), "wrong name for vars[%u]: %s.\n", i, wine_dbgstr_w(str));
+            IScriptModule_Release(mod);
+            VariantClear(&vars[i]);
+            SysFreeString(str);
+        }
+
+        SET_EXPECT(Close);
+        IEnumVARIANT_Release(enumvar);
+        CHECK_CALLED(Close);
+    }
+}
+
+static void test_IScriptControl_get_CodeObject(void)
+{
+    IScriptControl *sc;
+    IDispatch *disp;
+    HRESULT hr;
+    BSTR str;
+
+    hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                          &IID_IScriptControl, (void**)&sc);
+    ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+    hr = IScriptControl_get_CodeObject(sc, &disp);
+    ok(hr == E_FAIL, "IScriptControl_get_CodeObject returned: 0x%08x.\n", hr);
+
+    str = SysAllocString(L"jscript");
+    hr = IScriptControl_put_Language(sc, str);
+    ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+    SysFreeString(str);
+
+    hr = IScriptControl_get_CodeObject(sc, &disp);
+    ok(hr == S_OK, "IScriptControl_get_CodeObject failed: 0x%08x.\n", hr);
+
+    IDispatch_Release(disp);
+    IScriptControl_Release(sc);
+
+    if (have_custom_engine)
+    {
+        hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                              &IID_IScriptControl, (void**)&sc);
+        ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+        SET_EXPECT(CreateInstance);
+        SET_EXPECT(SetInterfaceSafetyOptions);
+        SET_EXPECT(SetScriptSite);
+        SET_EXPECT(QI_IActiveScriptParse);
+        SET_EXPECT(InitNew);
+
+        str = SysAllocString(L"testscript");
+        hr = IScriptControl_put_Language(sc, str);
+        ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+        SysFreeString(str);
+
+        CHECK_CALLED(CreateInstance);
+        CHECK_CALLED(SetInterfaceSafetyOptions);
+        CHECK_CALLED(SetScriptSite);
+        CHECK_CALLED(QI_IActiveScriptParse);
+        CHECK_CALLED(InitNew);
+
+        GetScriptDispatch_expected_name = NULL;
+        SET_EXPECT(SetScriptState_STARTED);
+        SET_EXPECT(GetScriptDispatch);
+        hr = IScriptControl_get_CodeObject(sc, &disp);
+        ok(hr == S_OK, "IScriptControl_get_CodeObject failed: 0x%08x.\n", hr);
+        ok(disp == (IDispatch*)&DispatchEx, "unexpected code object %p\n", disp);
+        CHECK_CALLED(GetScriptDispatch);
+        CHECK_CALLED(SetScriptState_STARTED);
+
+        IDispatch_Release(disp);
+        IActiveScriptSite_Release(site);
+
+        SET_EXPECT(Close);
+        IScriptControl_Release(sc);
+        CHECK_CALLED(Close);
     }
 }
 
@@ -2681,6 +2987,7 @@ START_TEST(msscript)
     test_IScriptControl_ExecuteStatement();
     test_IScriptControl_Run();
     test_IScriptControl_get_Modules();
+    test_IScriptControl_get_CodeObject();
 
     init_registry(FALSE);
 

@@ -200,7 +200,7 @@
 @ cdecl _atoi_l(str ptr) MSVCRT__atoi_l
 @ cdecl _atol_l(str ptr) MSVCRT__atol_l
 @ cdecl _atoldbl(ptr str) MSVCRT__atoldbl
-@ stub _atoldbl_l
+@ cdecl _atoldbl_l(ptr str ptr) MSVCRT__atoldbl_l
 @ cdecl -ret64 _atoll_l(str ptr) MSVCRT__atoll_l
 @ cdecl _beep(long long) MSVCRT__beep
 @ cdecl _beginthread(ptr long ptr)
@@ -449,7 +449,7 @@
 @ stub _ismbbkalnum(long)
 @ stub _ismbbkalnum_l
 @ cdecl _ismbbkana(long)
-@ stub _ismbbkana_l
+@ cdecl _ismbbkana_l(long ptr)
 @ stub _ismbbkprint(long)
 @ stub _ismbbkprint_l
 @ stub _ismbbkpunct(long)
@@ -463,15 +463,15 @@
 @ cdecl _ismbbtrail(long)
 @ cdecl _ismbbtrail_l(long ptr)
 @ cdecl _ismbcalnum(long)
-@ stub _ismbcalnum_l
+@ cdecl _ismbcalnum_l(long ptr)
 @ cdecl _ismbcalpha(long)
-@ stub _ismbcalpha_l
+@ cdecl _ismbcalpha_l(long ptr)
 @ stub _ismbcblank
 @ stub _ismbcblank_l
 @ cdecl _ismbcdigit(long)
-@ stub _ismbcdigit_l
+@ cdecl _ismbcdigit_l(long ptr)
 @ cdecl _ismbcgraph(long)
-@ stub _ismbcgraph_l
+@ cdecl _ismbcgraph_l(long ptr)
 @ cdecl _ismbchira(long)
 @ stub _ismbchira_l
 @ cdecl _ismbckata(long)
@@ -485,17 +485,17 @@
 @ cdecl _ismbclegal(long)
 @ cdecl _ismbclegal_l(long ptr)
 @ stub _ismbclower(long)
-@ stub _ismbclower_l
+@ cdecl _ismbclower_l(long ptr)
 @ cdecl _ismbcprint(long)
-@ stub _ismbcprint_l
+@ cdecl _ismbcprint_l(long ptr)
 @ cdecl _ismbcpunct(long)
-@ stub _ismbcpunct_l
+@ cdecl _ismbcpunct_l(long ptr)
 @ cdecl _ismbcspace(long)
-@ stub _ismbcspace_l
+@ cdecl _ismbcspace_l(long ptr)
 @ cdecl _ismbcsymbol(long)
 @ stub _ismbcsymbol_l
 @ cdecl _ismbcupper(long)
-@ stub _ismbcupper_l
+@ cdecl _ismbcupper_l(long ptr)
 @ cdecl _ismbslead(ptr ptr)
 @ stub _ismbslead_l
 @ cdecl _ismbstrail(ptr ptr)
@@ -851,7 +851,7 @@
 @ cdecl _o__atoi_l(str ptr) MSVCRT__atoi_l
 @ cdecl _o__atol_l(str ptr) MSVCRT__atol_l
 @ cdecl _o__atoldbl(ptr str) MSVCRT__atoldbl
-@ stub _o__atoldbl_l
+@ cdecl _o__atoldbl_l(ptr str ptr) MSVCRT__atoldbl_l
 @ cdecl -ret64 _o__atoll_l(str ptr) MSVCRT__atoll_l
 @ cdecl _o__beep(long long) MSVCRT__beep
 @ cdecl _o__beginthread(ptr long ptr) _beginthread
@@ -1048,7 +1048,7 @@
 @ stub _o__ismbbkalnum
 @ stub _o__ismbbkalnum_l
 @ cdecl _o__ismbbkana(long) _ismbbkana
-@ stub _o__ismbbkana_l
+@ cdecl _o__ismbbkana_l(long ptr) _ismbbkana_l
 @ stub _o__ismbbkprint
 @ stub _o__ismbbkprint_l
 @ stub _o__ismbbkpunct
@@ -1062,15 +1062,15 @@
 @ cdecl _o__ismbbtrail(long) _ismbbtrail
 @ cdecl _o__ismbbtrail_l(long ptr) _ismbbtrail_l
 @ cdecl _o__ismbcalnum(long) _ismbcalnum
-@ stub _o__ismbcalnum_l
+@ cdecl _o__ismbcalnum_l(long ptr) _ismbcalnum_l
 @ cdecl _o__ismbcalpha(long) _ismbcalpha
-@ stub _o__ismbcalpha_l
+@ cdecl _o__ismbcalpha_l(long ptr) _ismbcalpha_l
 @ stub _o__ismbcblank
 @ stub _o__ismbcblank_l
 @ cdecl _o__ismbcdigit(long) _ismbcdigit
-@ stub _o__ismbcdigit_l
+@ cdecl _o__ismbcdigit_l(long ptr) _ismbcdigit_l
 @ cdecl _o__ismbcgraph(long) _ismbcgraph
-@ stub _o__ismbcgraph_l
+@ cdecl _o__ismbcgraph_l(long ptr) _ismbcgraph_l
 @ cdecl _o__ismbchira(long) _ismbchira
 @ stub _o__ismbchira_l
 @ cdecl _o__ismbckata(long) _ismbckata
@@ -1084,17 +1084,17 @@
 @ cdecl _o__ismbclegal(long) _ismbclegal
 @ cdecl _o__ismbclegal_l(long ptr) _ismbclegal_l
 @ stub _o__ismbclower
-@ stub _o__ismbclower_l
+@ cdecl _o__ismbclower_l(long ptr) _ismbclower_l
 @ cdecl _o__ismbcprint(long) _ismbcprint
-@ stub _o__ismbcprint_l
+@ cdecl _o__ismbcprint_l(long ptr) _ismbcprint_l
 @ cdecl _o__ismbcpunct(long) _ismbcpunct
-@ stub _o__ismbcpunct_l
+@ cdecl _o__ismbcpunct_l(long ptr) _ismbcpunct_l
 @ cdecl _o__ismbcspace(long) _ismbcspace
-@ stub _o__ismbcspace_l
+@ cdecl _o__ismbcspace_l(long ptr) _ismbcspace_l
 @ cdecl _o__ismbcsymbol(long) _ismbcsymbol
 @ stub _o__ismbcsymbol_l
 @ cdecl _o__ismbcupper(long) _ismbcupper
-@ stub _o__ismbcupper_l
+@ cdecl _o__ismbcupper_l(long ptr) _ismbcupper_l
 @ cdecl _o__ismbslead(ptr ptr) _ismbslead
 @ stub _o__ismbslead_l
 @ cdecl _o__ismbstrail(ptr ptr) _ismbstrail
@@ -1816,7 +1816,7 @@
 @ cdecl _o_wcrtomb_s(ptr ptr long long ptr) MSVCRT_wcrtomb_s
 @ cdecl _o_wcscat_s(wstr long wstr) MSVCRT_wcscat_s
 @ cdecl _o_wcscoll(wstr wstr) MSVCRT_wcscoll
-@ cdecl _o_wcscpy(ptr wstr) ntdll.wcscpy
+@ cdecl _o_wcscpy(ptr wstr) MSVCRT_wcscpy
 @ cdecl _o_wcscpy_s(ptr long wstr) MSVCRT_wcscpy_s
 @ cdecl _o_wcsftime(ptr long wstr ptr) MSVCRT_wcsftime
 @ cdecl _o_wcsncat_s(wstr long wstr long) MSVCRT_wcsncat_s
@@ -2062,7 +2062,7 @@
 @ cdecl _wctime64_s(ptr long ptr) MSVCRT__wctime64_s
 @ cdecl _wctomb_l(ptr long ptr) MSVCRT__wctomb_l
 @ cdecl _wctomb_s_l(ptr ptr long long ptr) MSVCRT__wctomb_s_l
-@ stub _wctype
+@ extern _wctype MSVCRT__wctype
 @ cdecl _wdupenv_s(ptr ptr wstr)
 @ varargs _wexecl(wstr wstr)
 @ varargs _wexecle(wstr wstr)
@@ -2494,7 +2494,7 @@
 @ cdecl sqrt(double) MSVCRT_sqrt
 @ cdecl -arch=!i386 sqrtf(float) MSVCRT_sqrtf
 @ cdecl srand(long) MSVCRT_srand
-@ cdecl strcat(str str) ntdll.strcat
+@ cdecl strcat(str str) MSVCRT_strcat
 @ cdecl strcat_s(str long str) MSVCRT_strcat_s
 @ cdecl strchr(str long) MSVCRT_strchr
 @ cdecl strcmp(str str) MSVCRT_strcmp
@@ -2554,12 +2554,12 @@
 @ cdecl ungetwc(long ptr) MSVCRT_ungetwc
 @ cdecl wcrtomb(ptr long ptr) MSVCRT_wcrtomb
 @ cdecl wcrtomb_s(ptr ptr long long ptr) MSVCRT_wcrtomb_s
-@ cdecl wcscat(wstr wstr) ntdll.wcscat
+@ cdecl wcscat(wstr wstr) MSVCRT_wcscat
 @ cdecl wcscat_s(wstr long wstr) MSVCRT_wcscat_s
 @ cdecl wcschr(wstr long) MSVCRT_wcschr
 @ cdecl wcscmp(wstr wstr) MSVCRT_wcscmp
 @ cdecl wcscoll(wstr wstr) MSVCRT_wcscoll
-@ cdecl wcscpy(ptr wstr) ntdll.wcscpy
+@ cdecl wcscpy(ptr wstr) MSVCRT_wcscpy
 @ cdecl wcscpy_s(ptr long wstr) MSVCRT_wcscpy_s
 @ cdecl wcscspn(wstr wstr) ntdll.wcscspn
 @ cdecl wcsftime(ptr long wstr ptr) MSVCRT_wcsftime

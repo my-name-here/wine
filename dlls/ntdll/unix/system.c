@@ -123,6 +123,12 @@ struct smbios_board
     BYTE product;
     BYTE version;
     BYTE serial;
+    BYTE asset_tag;
+    BYTE feature_flags;
+    BYTE location;
+    WORD chassis_handle;
+    BYTE board_type;
+    BYTE num_contained_handles;
 };
 
 struct smbios_chassis
@@ -137,6 +143,18 @@ struct smbios_chassis
     BYTE power_supply_state;
     BYTE thermal_state;
     BYTE security_status;
+    DWORD oem_defined;
+    BYTE height;
+    BYTE num_power_cords;
+    BYTE num_contained_elements;
+    BYTE contained_element_rec_length;
+};
+
+struct smbios_boot_info
+{
+    struct smbios_header hdr;
+    BYTE reserved[6];
+    BYTE boot_status[10];
 };
 
 #include "poppack.h"
@@ -1250,18 +1268,21 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         size_t system_vendor_len, system_product_len, system_version_len, system_serial_len;
         char system_sku[128], system_family[128];
         size_t system_sku_len, system_family_len;
-        char board_vendor[128], board_product[128], board_version[128], board_serial[128];
-        size_t board_vendor_len, board_product_len, board_version_len, board_serial_len;
+        char board_vendor[128], board_product[128], board_version[128], board_serial[128], board_asset_tag[128];
+        size_t board_vendor_len, board_product_len, board_version_len, board_serial_len, board_asset_tag_len;
         char chassis_vendor[128], chassis_version[128], chassis_serial[128], chassis_asset_tag[128];
         char chassis_type[11] = "2"; /* unknown */
         size_t chassis_vendor_len, chassis_version_len, chassis_serial_len, chassis_asset_tag_len;
         char *buffer = (char*)sfti->TableBuffer;
         BYTE string_count;
+        BYTE handle_count = 0;
         struct smbios_prologue *prologue;
         struct smbios_bios *bios;
         struct smbios_system *system;
         struct smbios_board *board;
         struct smbios_chassis *chassis;
+        struct smbios_boot_info *boot_info;
+        struct smbios_header *end_of_table;
 
 #define S(s) s, sizeof(s)
         bios_vendor_len = get_smbios_string("/sys/class/dmi/id/bios_vendor", S(bios_vendor));
@@ -1277,6 +1298,7 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         board_product_len = get_smbios_string("/sys/class/dmi/id/board_name", S(board_product));
         board_version_len = get_smbios_string("/sys/class/dmi/id/board_version", S(board_version));
         board_serial_len = get_smbios_string("/sys/class/dmi/id/board_serial", S(board_serial));
+        board_asset_tag_len = get_smbios_string("/sys/class/dmi/id/board_asset_tag", S(board_asset_tag));
         chassis_vendor_len = get_smbios_string("/sys/class/dmi/id/chassis_vendor", S(chassis_vendor));
         chassis_version_len = get_smbios_string("/sys/class/dmi/id/chassis_version", S(chassis_version));
         chassis_serial_len = get_smbios_string("/sys/class/dmi/id/chassis_serial", S(chassis_serial));
@@ -1295,11 +1317,18 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
                              L(system_serial_len) + L(system_sku_len) + L(system_family_len) + 1, 2);
 
         *required_len += sizeof(struct smbios_board);
-        *required_len += max(L(board_vendor_len) + L(board_product_len) + L(board_version_len) + L(board_serial_len) + 1, 2);
+        *required_len += max(L(board_vendor_len) + L(board_product_len) + L(board_version_len) +
+                             L(board_serial_len) + L(board_asset_tag_len) + 1, 2);
 
         *required_len += sizeof(struct smbios_chassis);
         *required_len += max(L(chassis_vendor_len) + L(chassis_version_len) + L(chassis_serial_len) +
                              L(chassis_asset_tag_len) + 1, 2);
+
+        *required_len += sizeof(struct smbios_boot_info);
+        *required_len += 2;
+
+        *required_len += sizeof(struct smbios_header);
+        *required_len += 2;
 #undef L
 
         sfti->TableBufferLength = *required_len;
@@ -1321,7 +1350,7 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         bios = (struct smbios_bios*)buffer;
         bios->hdr.type = 0;
         bios->hdr.length = sizeof(struct smbios_bios);
-        bios->hdr.handle = 0;
+        bios->hdr.handle = handle_count++;
         bios->vendor = bios_vendor_len ? ++string_count : 0;
         bios->version = bios_version_len ? ++string_count : 0;
         bios->start = 0;
@@ -1346,7 +1375,7 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         system = (struct smbios_system*)buffer;
         system->hdr.type = 1;
         system->hdr.length = sizeof(struct smbios_system);
-        system->hdr.handle = 0;
+        system->hdr.handle = handle_count++;
         system->vendor = system_vendor_len ? ++string_count : 0;
         system->product = system_product_len ? ++string_count : 0;
         system->version = system_version_len ? ++string_count : 0;
@@ -1367,28 +1396,10 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         *buffer++ = 0;
 
         string_count = 0;
-        board = (struct smbios_board*)buffer;
-        board->hdr.type = 2;
-        board->hdr.length = sizeof(struct smbios_board);
-        board->hdr.handle = 0;
-        board->vendor = board_vendor_len ? ++string_count : 0;
-        board->product = board_product_len ? ++string_count : 0;
-        board->version = board_version_len ? ++string_count : 0;
-        board->serial = board_serial_len ? ++string_count : 0;
-        buffer += sizeof(struct smbios_board);
-
-        copy_smbios_string(&buffer, board_vendor, board_vendor_len);
-        copy_smbios_string(&buffer, board_product, board_product_len);
-        copy_smbios_string(&buffer, board_version, board_version_len);
-        copy_smbios_string(&buffer, board_serial, board_serial_len);
-        if (!string_count) *buffer++ = 0;
-        *buffer++ = 0;
-
-        string_count = 0;
         chassis = (struct smbios_chassis*)buffer;
         chassis->hdr.type = 3;
         chassis->hdr.length = sizeof(struct smbios_chassis);
-        chassis->hdr.handle = 0;
+        chassis->hdr.handle = handle_count++;
         chassis->vendor = chassis_vendor_len ? ++string_count : 0;
         chassis->type = atoi(chassis_type);
         chassis->version = chassis_version_len ? ++string_count : 0;
@@ -1398,6 +1409,11 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         chassis->power_supply_state = 0x02; /* unknown */
         chassis->thermal_state = 0x02; /* unknown */
         chassis->security_status = 0x02; /* unknown */
+        chassis->oem_defined = 0;
+        chassis->height = 0; /* undefined */
+        chassis->num_power_cords = 0; /* unspecified */
+        chassis->num_contained_elements = 0;
+        chassis->contained_element_rec_length = 3;
         buffer += sizeof(struct smbios_chassis);
 
         copy_smbios_string(&buffer, chassis_vendor, chassis_vendor_len);
@@ -1405,6 +1421,49 @@ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULON
         copy_smbios_string(&buffer, chassis_serial, chassis_serial_len);
         copy_smbios_string(&buffer, chassis_asset_tag, chassis_asset_tag_len);
         if (!string_count) *buffer++ = 0;
+        *buffer++ = 0;
+
+        string_count = 0;
+        board = (struct smbios_board*)buffer;
+        board->hdr.type = 2;
+        board->hdr.length = sizeof(struct smbios_board);
+        board->hdr.handle = handle_count++;
+        board->vendor = board_vendor_len ? ++string_count : 0;
+        board->product = board_product_len ? ++string_count : 0;
+        board->version = board_version_len ? ++string_count : 0;
+        board->serial = board_serial_len ? ++string_count : 0;
+        board->asset_tag = board_asset_tag_len ? ++string_count : 0;
+        board->feature_flags = 0x5; /* hosting board, removable */
+        board->location = 0;
+        board->chassis_handle = chassis->hdr.handle;
+        board->board_type = 0xa; /* motherboard */
+        board->num_contained_handles = 0;
+        buffer += sizeof(struct smbios_board);
+
+        copy_smbios_string(&buffer, board_vendor, board_vendor_len);
+        copy_smbios_string(&buffer, board_product, board_product_len);
+        copy_smbios_string(&buffer, board_version, board_version_len);
+        copy_smbios_string(&buffer, board_serial, board_serial_len);
+        copy_smbios_string(&buffer, board_asset_tag, board_asset_tag_len);
+        if (!string_count) *buffer++ = 0;
+        *buffer++ = 0;
+
+        boot_info = (struct smbios_boot_info*)buffer;
+        boot_info->hdr.type = 32;
+        boot_info->hdr.length = sizeof(struct smbios_boot_info);
+        boot_info->hdr.handle = handle_count++;
+        memset(boot_info->reserved, 0, sizeof(boot_info->reserved));
+        memset(boot_info->boot_status, 0, sizeof(boot_info->boot_status)); /* no errors detected */
+        buffer += sizeof(struct smbios_boot_info);
+        *buffer++ = 0;
+        *buffer++ = 0;
+
+        end_of_table = (struct smbios_header*)buffer;
+        end_of_table->type = 127;
+        end_of_table->length = sizeof(struct smbios_header);
+        end_of_table->handle = handle_count++;
+        buffer += sizeof(struct smbios_header);
+        *buffer++ = 0;
         *buffer++ = 0;
 
         return STATUS_SUCCESS;
@@ -2612,6 +2671,60 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
 }
 
 
+/******************************************************************************
+ *              NtSetSystemInformation  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSetSystemInformation( SYSTEM_INFORMATION_CLASS class, void *info, ULONG length )
+{
+    FIXME( "(0x%08x,%p,0x%08x) stub\n", class, info, length );
+    return STATUS_SUCCESS;
+}
+
+
+/******************************************************************************
+ *              NtQuerySystemEnvironmentValue  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtQuerySystemEnvironmentValue( UNICODE_STRING *name, WCHAR *buffer, ULONG length,
+                                               ULONG *retlen )
+{
+    FIXME( "(%s, %p, %u, %p), stub\n", debugstr_us(name), buffer, length, retlen );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtQuerySystemEnvironmentValueEx  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtQuerySystemEnvironmentValueEx( UNICODE_STRING *name, GUID *vendor, void *buffer,
+                                                 ULONG *retlen, ULONG *attrib )
+{
+    FIXME( "(%s, %s, %p, %p, %p), stub\n", debugstr_us(name),
+           debugstr_guid(vendor), buffer, retlen, attrib );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtSystemDebugControl  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSystemDebugControl( SYSDBG_COMMAND command, void *in_buff, ULONG in_len,
+                                      void *out_buff, ULONG out_len, ULONG *retlen )
+{
+    FIXME( "(%d, %p, %d, %p, %d, %p), stub\n", command, in_buff, in_len, out_buff, out_len, retlen );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtShutdownSystem  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtShutdownSystem( SHUTDOWN_ACTION action )
+{
+    FIXME( "%d\n", action );
+    return STATUS_SUCCESS;
+}
+
+
 #ifdef linux
 
 /* Fallback using /proc/cpuinfo for Linux systems without cpufreq. For
@@ -2853,11 +2966,12 @@ NTSTATUS WINAPI NtPowerInformation( POWER_INFORMATION_LEVEL level, void *input, 
             FILE* f;
 
             for(i = 0; i < out_cpus; i++) {
-                sprintf(filename, "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i);
+                sprintf(filename, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
                 f = fopen(filename, "r");
-                if (f && (fscanf(f, "%d", &cpu_power[i].CurrentMhz) == 1)) {
-                    cpu_power[i].CurrentMhz /= 1000;
+                if (f && (fscanf(f, "%d", &cpu_power[i].MaxMhz) == 1)) {
+                    cpu_power[i].MaxMhz /= 1000;
                     fclose(f);
+                    cpu_power[i].CurrentMhz = cpu_power[i].MaxMhz;
                 }
                 else {
                     if(i == 0) {
@@ -2867,16 +2981,6 @@ NTSTATUS WINAPI NtPowerInformation( POWER_INFORMATION_LEVEL level, void *input, 
                     }
                     else
                         cpu_power[i].CurrentMhz = cpu_power[0].CurrentMhz;
-                    if(f) fclose(f);
-                }
-
-                sprintf(filename, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
-                f = fopen(filename, "r");
-                if (f && (fscanf(f, "%d", &cpu_power[i].MaxMhz) == 1)) {
-                    cpu_power[i].MaxMhz /= 1000;
-                    fclose(f);
-                }
-                else {
                     cpu_power[i].MaxMhz = cpu_power[i].CurrentMhz;
                     if(f) fclose(f);
                 }
@@ -2964,4 +3068,101 @@ NTSTATUS WINAPI NtPowerInformation( POWER_INFORMATION_LEVEL level, void *input, 
         WARN( "Unimplemented NtPowerInformation action: %d\n", level );
         return STATUS_NOT_IMPLEMENTED;
     }
+}
+
+
+/******************************************************************************
+ *              NtLoadDriver  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtLoadDriver( const UNICODE_STRING *name )
+{
+    FIXME( "(%s), stub!\n", debugstr_us(name) );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtUnloadDriver  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtUnloadDriver( const UNICODE_STRING *name )
+{
+    FIXME( "(%s), stub!\n", debugstr_us(name) );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtDisplayString  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtDisplayString( UNICODE_STRING *string )
+{
+    ERR( "%s\n", debugstr_us(string) );
+    return STATUS_SUCCESS;
+}
+
+
+/******************************************************************************
+ *              NtRaiseHardError  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtRaiseHardError( NTSTATUS status, ULONG count,
+                                  UNICODE_STRING *params_mask, void **params,
+                                  HARDERROR_RESPONSE_OPTION option, HARDERROR_RESPONSE *response )
+{
+    FIXME( "%08x stub\n", status );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtInitiatePowerAction  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtInitiatePowerAction( POWER_ACTION action, SYSTEM_POWER_STATE state,
+                                       ULONG flags, BOOLEAN async )
+{
+    FIXME( "(%d,%d,0x%08x,%d),stub\n", action, state, flags, async );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtCreatePowerRequest  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtCreatePowerRequest( HANDLE *handle, COUNTED_REASON_CONTEXT *context )
+{
+    FIXME( "(%p, %p): stub\n", handle, context );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtSetPowerRequest  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSetPowerRequest( HANDLE handle, POWER_REQUEST_TYPE type )
+{
+    FIXME( "(%p, %u): stub\n", handle, type );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtClearPowerRequest  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtClearPowerRequest( HANDLE handle, POWER_REQUEST_TYPE type )
+{
+    FIXME( "(%p, %u): stub\n", handle, type );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtSetThreadExecutionState  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSetThreadExecutionState( EXECUTION_STATE new_state, EXECUTION_STATE *old_state )
+{
+    static EXECUTION_STATE current = ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED | ES_USER_PRESENT;
+
+    WARN( "(0x%x, %p): stub, harmless.\n", new_state, old_state );
+    *old_state = current;
+    if (!(current & ES_CONTINUOUS) || (new_state & ES_CONTINUOUS)) current = new_state;
+    return STATUS_SUCCESS;
 }

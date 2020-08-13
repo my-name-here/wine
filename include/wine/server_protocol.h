@@ -1218,6 +1218,18 @@ struct dup_handle_reply
 
 
 
+struct make_temporary_request
+{
+    struct request_header __header;
+    obj_handle_t handle;
+};
+struct make_temporary_reply
+{
+    struct reply_header __header;
+};
+
+
+
 struct open_process_request
 {
     struct request_header __header;
@@ -1821,7 +1833,7 @@ struct alloc_console_reply
 {
     struct reply_header __header;
     obj_handle_t handle_in;
-    obj_handle_t event;
+    char __pad_12[4];
 };
 
 
@@ -1838,24 +1850,6 @@ struct free_console_reply
 
 
 
-struct open_console_request
-{
-    struct request_header __header;
-    obj_handle_t from;
-    unsigned int access;
-    unsigned int attributes;
-    int          share;
-    char __pad_28[4];
-};
-struct open_console_reply
-{
-    struct reply_header __header;
-    obj_handle_t handle;
-    char __pad_12[4];
-};
-
-
-
 struct attach_console_request
 {
     struct request_header __header;
@@ -1864,10 +1858,6 @@ struct attach_console_request
 struct attach_console_reply
 {
     struct reply_header __header;
-    obj_handle_t std_in;
-    obj_handle_t std_out;
-    obj_handle_t std_err;
-    char __pad_20[4];
 };
 
 
@@ -1904,7 +1894,6 @@ struct set_console_input_info_reply
 {
     struct reply_header __header;
 };
-#define SET_CONSOLE_INPUT_INFO_ACTIVE_SB        0x01
 #define SET_CONSOLE_INPUT_INFO_TITLE            0x02
 #define SET_CONSOLE_INPUT_INFO_HISTORY_MODE     0x04
 #define SET_CONSOLE_INPUT_INFO_HISTORY_SIZE     0x08
@@ -1980,72 +1969,6 @@ struct create_console_output_reply
     struct reply_header __header;
     obj_handle_t handle_out;
     char __pad_12[4];
-};
-
-
-
-struct write_console_output_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    int          x;
-    int          y;
-    int          mode;
-    int          wrap;
-    /* VARARG(data,bytes); */
-};
-struct write_console_output_reply
-{
-    struct reply_header __header;
-    int          written;
-    int          width;
-    int          height;
-    char __pad_20[4];
-};
-enum char_info_mode
-{
-    CHAR_INFO_MODE_TEXT,
-    CHAR_INFO_MODE_ATTR,
-    CHAR_INFO_MODE_TEXTATTR,
-    CHAR_INFO_MODE_TEXTSTDATTR
-};
-
-
-
-struct read_console_output_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    int          x;
-    int          y;
-    int          mode;
-    int          wrap;
-};
-struct read_console_output_reply
-{
-    struct reply_header __header;
-    int          width;
-    int          height;
-    /* VARARG(data,bytes); */
-};
-
-
-
-struct move_console_output_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    short int    x_src;
-    short int    y_src;
-    short int    x_dst;
-    short int    y_dst;
-    short int    w;
-    short int    h;
-    char __pad_28[4];
-};
-struct move_console_output_reply
-{
-    struct reply_header __header;
 };
 
 
@@ -4945,18 +4868,6 @@ struct get_object_type_reply
 
 
 
-struct unlink_object_request
-{
-    struct request_header __header;
-    obj_handle_t   handle;
-};
-struct unlink_object_reply
-{
-    struct reply_header __header;
-};
-
-
-
 struct get_token_impersonation_level_request
 {
     struct request_header __header;
@@ -5600,6 +5511,7 @@ enum request
     REQ_close_handle,
     REQ_set_handle_info,
     REQ_dup_handle,
+    REQ_make_temporary,
     REQ_open_process,
     REQ_open_thread,
     REQ_select,
@@ -5638,7 +5550,6 @@ enum request
     REQ_set_socket_deferred,
     REQ_alloc_console,
     REQ_free_console,
-    REQ_open_console,
     REQ_attach_console,
     REQ_get_console_wait_event,
     REQ_set_console_input_info,
@@ -5646,9 +5557,6 @@ enum request
     REQ_append_console_input_history,
     REQ_get_console_input_history,
     REQ_create_console_output,
-    REQ_write_console_output,
-    REQ_read_console_output,
-    REQ_move_console_output,
     REQ_send_console_signal,
     REQ_read_directory_changes,
     REQ_read_change,
@@ -5821,7 +5729,6 @@ enum request
     REQ_query_symlink,
     REQ_get_object_info,
     REQ_get_object_type,
-    REQ_unlink_object,
     REQ_get_token_impersonation_level,
     REQ_allocate_locally_unique_id,
     REQ_create_device_manager,
@@ -5894,6 +5801,7 @@ union generic_request
     struct close_handle_request close_handle_request;
     struct set_handle_info_request set_handle_info_request;
     struct dup_handle_request dup_handle_request;
+    struct make_temporary_request make_temporary_request;
     struct open_process_request open_process_request;
     struct open_thread_request open_thread_request;
     struct select_request select_request;
@@ -5932,7 +5840,6 @@ union generic_request
     struct set_socket_deferred_request set_socket_deferred_request;
     struct alloc_console_request alloc_console_request;
     struct free_console_request free_console_request;
-    struct open_console_request open_console_request;
     struct attach_console_request attach_console_request;
     struct get_console_wait_event_request get_console_wait_event_request;
     struct set_console_input_info_request set_console_input_info_request;
@@ -5940,9 +5847,6 @@ union generic_request
     struct append_console_input_history_request append_console_input_history_request;
     struct get_console_input_history_request get_console_input_history_request;
     struct create_console_output_request create_console_output_request;
-    struct write_console_output_request write_console_output_request;
-    struct read_console_output_request read_console_output_request;
-    struct move_console_output_request move_console_output_request;
     struct send_console_signal_request send_console_signal_request;
     struct read_directory_changes_request read_directory_changes_request;
     struct read_change_request read_change_request;
@@ -6115,7 +6019,6 @@ union generic_request
     struct query_symlink_request query_symlink_request;
     struct get_object_info_request get_object_info_request;
     struct get_object_type_request get_object_type_request;
-    struct unlink_object_request unlink_object_request;
     struct get_token_impersonation_level_request get_token_impersonation_level_request;
     struct allocate_locally_unique_id_request allocate_locally_unique_id_request;
     struct create_device_manager_request create_device_manager_request;
@@ -6186,6 +6089,7 @@ union generic_reply
     struct close_handle_reply close_handle_reply;
     struct set_handle_info_reply set_handle_info_reply;
     struct dup_handle_reply dup_handle_reply;
+    struct make_temporary_reply make_temporary_reply;
     struct open_process_reply open_process_reply;
     struct open_thread_reply open_thread_reply;
     struct select_reply select_reply;
@@ -6224,7 +6128,6 @@ union generic_reply
     struct set_socket_deferred_reply set_socket_deferred_reply;
     struct alloc_console_reply alloc_console_reply;
     struct free_console_reply free_console_reply;
-    struct open_console_reply open_console_reply;
     struct attach_console_reply attach_console_reply;
     struct get_console_wait_event_reply get_console_wait_event_reply;
     struct set_console_input_info_reply set_console_input_info_reply;
@@ -6232,9 +6135,6 @@ union generic_reply
     struct append_console_input_history_reply append_console_input_history_reply;
     struct get_console_input_history_reply get_console_input_history_reply;
     struct create_console_output_reply create_console_output_reply;
-    struct write_console_output_reply write_console_output_reply;
-    struct read_console_output_reply read_console_output_reply;
-    struct move_console_output_reply move_console_output_reply;
     struct send_console_signal_reply send_console_signal_reply;
     struct read_directory_changes_reply read_directory_changes_reply;
     struct read_change_reply read_change_reply;
@@ -6407,7 +6307,6 @@ union generic_reply
     struct query_symlink_reply query_symlink_reply;
     struct get_object_info_reply get_object_info_reply;
     struct get_object_type_reply get_object_type_reply;
-    struct unlink_object_reply unlink_object_reply;
     struct get_token_impersonation_level_reply get_token_impersonation_level_reply;
     struct allocate_locally_unique_id_reply allocate_locally_unique_id_reply;
     struct create_device_manager_reply create_device_manager_reply;
@@ -6452,7 +6351,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 626
+#define SERVER_PROTOCOL_VERSION 634
 
 /* ### protocol_version end ### */
 

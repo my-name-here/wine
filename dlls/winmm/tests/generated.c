@@ -49,23 +49,23 @@
  * Test helper macros
  */
 
-#define TEST_TYPE_SIZE(type, size)             C_ASSERT(sizeof(type) == size);
+#define TEST_TYPE_SIZE(type, size)              C_ASSERT(sizeof(type) == size);
 
 #ifdef TYPE_ALIGNMENT
-# define TEST_TYPE_ALIGN(type, align)          C_ASSERT(TYPE_ALIGNMENT(type) == align);
+# define TEST_TYPE_ALIGN(type, align)           C_ASSERT(TYPE_ALIGNMENT(type) == align);
 #else
 # define TEST_TYPE_ALIGN(type, align)
 #endif
 
 #ifdef _TYPE_ALIGNMENT
-# define TEST_TARGET_ALIGN(type, align)        C_ASSERT(_TYPE_ALIGNMENT(*(type)0) == align);
-# define TEST_FIELD_ALIGN(type, field, align)  C_ASSERT(_TYPE_ALIGNMENT(((type*)0)->field) == align);
+# define TEST_TARGET_ALIGN(type, align)         C_ASSERT(_TYPE_ALIGNMENT(*(type)0) == align);
+# define TEST_FIELD_ALIGN(type, field, align)   C_ASSERT(_TYPE_ALIGNMENT(((type*)0)->field) == align);
 #else
 # define TEST_TARGET_ALIGN(type, align)
 # define TEST_FIELD_ALIGN(type, field, align)
 #endif
 
-#define TEST_FIELD_OFFSET(type, field, offset) C_ASSERT(FIELD_OFFSET(type, field) == offset);
+#define TEST_FIELD_OFFSET(type, field, offset)  C_ASSERT(FIELD_OFFSET(type, field) == offset);
 
 #define TEST_TARGET_SIZE(type, size)            TEST_TYPE_SIZE(*(type)0, size)
 #define TEST_FIELD_SIZE(type, field, size)      TEST_TYPE_SIZE((((type*)0)->field), size)
@@ -812,6 +812,28 @@ static void test_pack_MIXERCONTROLW(void)
     TEST_FIELD_SIZE  (MIXERCONTROLW, cMultipleItems, 4)
     TEST_FIELD_ALIGN (MIXERCONTROLW, cMultipleItems, 1)
     TEST_FIELD_OFFSET(MIXERCONTROLW, cMultipleItems, 16)
+}
+
+static void test_pack_MIXERLINECONTROLSA(void)
+{
+    /* MIXERLINECONTROLSA (pack 1) */
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSA, cbStruct, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSA, cbStruct, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSA, cbStruct, 0)
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSA, dwLineID, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSA, dwLineID, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSA, dwLineID, 4)
+}
+
+static void test_pack_MIXERLINECONTROLSW(void)
+{
+    /* MIXERLINECONTROLSW (pack 1) */
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSW, cbStruct, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSW, cbStruct, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSW, cbStruct, 0)
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSW, dwLineID, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSW, dwLineID, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSW, dwLineID, 4)
 }
 
 static void test_pack_MIXERCONTROLDETAILS(void)
@@ -3219,6 +3241,28 @@ static void test_pack_MIXERCONTROLW(void)
     TEST_FIELD_OFFSET(MIXERCONTROLW, cMultipleItems, 16)
 }
 
+static void test_pack_MIXERLINECONTROLSA(void)
+{
+    /* MIXERLINECONTROLSA (pack 1) */
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSA, cbStruct, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSA, cbStruct, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSA, cbStruct, 0)
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSA, dwLineID, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSA, dwLineID, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSA, dwLineID, 4)
+}
+
+static void test_pack_MIXERLINECONTROLSW(void)
+{
+    /* MIXERLINECONTROLSW (pack 1) */
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSW, cbStruct, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSW, cbStruct, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSW, cbStruct, 0)
+    TEST_FIELD_SIZE  (MIXERLINECONTROLSW, dwLineID, 4)
+    TEST_FIELD_ALIGN (MIXERLINECONTROLSW, dwLineID, 1)
+    TEST_FIELD_OFFSET(MIXERLINECONTROLSW, dwLineID, 4)
+}
+
 static void test_pack_MIXERCONTROLDETAILS(void)
 {
     /* MIXERCONTROLDETAILS (pack 1) */
@@ -5001,6 +5045,8 @@ static void test_pack(void)
     test_pack_MIXERCONTROLDETAILS_UNSIGNED();
     test_pack_MIXERCONTROLW();
     test_pack_MIXERLINEA();
+    test_pack_MIXERLINECONTROLSA();
+    test_pack_MIXERLINECONTROLSW();
     test_pack_MIXERLINEW();
     test_pack_MMCKINFO();
     test_pack_MMIOINFO();

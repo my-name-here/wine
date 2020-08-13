@@ -165,15 +165,6 @@ void raise_status( NTSTATUS status, EXCEPTION_RECORD *rec )
 }
 
 
-/*******************************************************************
- *		NtRaiseException (NTDLL.@)
- */
-NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance )
-{
-    return unix_funcs->NtRaiseException( rec, context, first_chance );
-}
-
-
 /***********************************************************************
  *            RtlRaiseStatus  (NTDLL.@)
  *
@@ -182,6 +173,18 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL 
 void WINAPI RtlRaiseStatus( NTSTATUS status )
 {
     raise_status( status, NULL );
+}
+
+
+/*******************************************************************
+ *		KiRaiseUserExceptionDispatcher  (NTDLL.@)
+ */
+NTSTATUS WINAPI KiRaiseUserExceptionDispatcher(void)
+{
+    DWORD code = NtCurrentTeb()->ExceptionCode;
+    EXCEPTION_RECORD rec = { code };
+    RtlRaiseException( &rec );
+    return code;
 }
 
 

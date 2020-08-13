@@ -1080,6 +1080,12 @@ struct rawinput_device
 #define DUP_HANDLE_MAKE_GLOBAL   0x80000000  /* Not a Windows flag */
 
 
+/* Make an object temporary */
+@REQ(make_temporary)
+    obj_handle_t handle;       /* handle to the object */
+@END
+
+
 /* Open a handle to a process */
 @REQ(open_process)
     process_id_t pid;          /* process id to open */
@@ -1458,7 +1464,6 @@ enum server_fd_type
     int          input_fd;      /* if pid=-1 (bare console to current process), fd for input */
 @REPLY
     obj_handle_t handle_in;     /* handle to console input */
-    obj_handle_t event;         /* handle to renderer events change notification */
 @END
 
 
@@ -1467,24 +1472,9 @@ enum server_fd_type
 @END
 
 
-/* Open a handle to the process console */
-@REQ(open_console)
-    obj_handle_t from;          /* console_in handle to get active screen buffer */
-    unsigned int access;        /* wanted access rights */
-    unsigned int attributes;    /* object attributes */
-    int          share;         /* share mask (only for output handles) */
-@REPLY
-    obj_handle_t handle;        /* handle to the console */
-@END
-
-
 /* Attach to a other process's console */
 @REQ(attach_console)
     process_id_t pid;           /* pid of attached console process */
-@REPLY
-    obj_handle_t std_in;        /* attached stdin */
-    obj_handle_t std_out;       /* attached stdout */
-    obj_handle_t std_err;       /* attached stderr */
 @END
 
 
@@ -1509,7 +1499,6 @@ enum server_fd_type
     user_handle_t win;           /* console window if backend supports it */
     VARARG(title,unicode_str);   /* console title */
 @END
-#define SET_CONSOLE_INPUT_INFO_ACTIVE_SB        0x01
 #define SET_CONSOLE_INPUT_INFO_TITLE            0x02
 #define SET_CONSOLE_INPUT_INFO_HISTORY_MODE     0x04
 #define SET_CONSOLE_INPUT_INFO_HISTORY_SIZE     0x08
@@ -1560,54 +1549,6 @@ enum server_fd_type
     int          fd;            /* for bare consoles, fd the screen-buffer is attached to */
 @REPLY
     obj_handle_t handle_out;    /* handle to the screen buffer */
-@END
-
-
-/* write data (chars and/or attributes) in a screen buffer */
-@REQ(write_console_output)
-    obj_handle_t handle;        /* handle to the console output */
-    int          x;             /* position where to start writing */
-    int          y;
-    int          mode;          /* char info (see below) */
-    int          wrap;          /* wrap around at end of line? */
-    VARARG(data,bytes);         /* info to write */
-@REPLY
-    int          written;       /* number of char infos actually written */
-    int          width;         /* width of screen buffer */
-    int          height;        /* height of screen buffer */
-@END
-enum char_info_mode
-{
-    CHAR_INFO_MODE_TEXT,        /* characters only */
-    CHAR_INFO_MODE_ATTR,        /* attributes only */
-    CHAR_INFO_MODE_TEXTATTR,    /* both characters and attributes */
-    CHAR_INFO_MODE_TEXTSTDATTR  /* characters but use standard attributes */
-};
-
-
-/* read data (chars and/or attributes) from a screen buffer */
-@REQ(read_console_output)
-    obj_handle_t handle;        /* handle to the console output */
-    int          x;             /* position (x,y) where to start reading */
-    int          y;
-    int          mode;          /* char info mode */
-    int          wrap;          /* wrap around at end of line? */
-@REPLY
-    int          width;         /* width of screen buffer */
-    int          height;        /* height of screen buffer */
-    VARARG(data,bytes);
-@END
-
-
-/* move a rect (of data) in screen buffer content */
-@REQ(move_console_output)
-    obj_handle_t handle;        /* handle to the console output */
-    short int    x_src;         /* position (x, y) of rect to start moving from */
-    short int    y_src;
-    short int    x_dst;         /* position (x, y) of rect to move to */
-    short int    y_dst;
-    short int    w;             /* size of the rect (width, height) to move */
-    short int    h;
 @END
 
 
@@ -3433,12 +3374,6 @@ struct handle_info
 @REPLY
     data_size_t    total;         /* needed size for type name */
     VARARG(type,unicode_str);     /* type name */
-@END
-
-
-/* Unlink a named object */
-@REQ(unlink_object)
-    obj_handle_t   handle;        /* handle to the object */
 @END
 
 

@@ -116,7 +116,7 @@ C_ASSERT( HEAP_MAX_SMALL_FREE_LIST % ALIGNMENT == 0 );
 /* Max size of the blocks on the free lists above HEAP_MAX_SMALL_FREE_LIST */
 static const SIZE_T HEAP_freeListSizes[] =
 {
-    0x200, 0x400, 0x1000, ~0UL
+    0x200, 0x400, 0x1000, ~(SIZE_T)0
 };
 #define HEAP_NB_FREE_LISTS (ARRAY_SIZE( HEAP_freeListSizes ) + HEAP_NB_SMALL_FREE_LISTS)
 
@@ -145,7 +145,13 @@ typedef struct tagSUBHEAP
 typedef struct tagHEAP
 {
     DWORD_PTR        unknown1[2];
-    DWORD            unknown2;
+    DWORD            unknown2[2];
+    DWORD_PTR        unknown3[4];
+    DWORD            unknown4;
+    DWORD_PTR        unknown5[2];
+    DWORD            unknown6[3];
+    DWORD_PTR        unknown7[2];
+    /* For Vista through 10, 'flags' is at offset 0x40 (x86) / 0x70 (x64) */
     DWORD            flags;         /* Heap flags */
     DWORD            force_flags;   /* Forced heap flags for debugging */
     SUBHEAP          subheap;       /* First sub-heap */
@@ -2007,7 +2013,7 @@ SIZE_T WINAPI RtlSizeHeap( HANDLE heap, ULONG flags, const void *ptr )
     if (!heapPtr)
     {
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus( STATUS_INVALID_HANDLE );
-        return ~0UL;
+        return ~(SIZE_T)0;
     }
     flags &= HEAP_NO_SERIALIZE;
     flags |= heapPtr->flags;
@@ -2017,7 +2023,7 @@ SIZE_T WINAPI RtlSizeHeap( HANDLE heap, ULONG flags, const void *ptr )
     if (!validate_block_pointer( heapPtr, &subheap, pArena ))
     {
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus( STATUS_INVALID_PARAMETER );
-        ret = ~0UL;
+        ret = ~(SIZE_T)0;
     }
     else if (!subheap)
     {

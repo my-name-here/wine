@@ -144,6 +144,7 @@ DECL_HANDLER(get_apc_result);
 DECL_HANDLER(close_handle);
 DECL_HANDLER(set_handle_info);
 DECL_HANDLER(dup_handle);
+DECL_HANDLER(make_temporary);
 DECL_HANDLER(open_process);
 DECL_HANDLER(open_thread);
 DECL_HANDLER(select);
@@ -182,7 +183,6 @@ DECL_HANDLER(enable_socket_event);
 DECL_HANDLER(set_socket_deferred);
 DECL_HANDLER(alloc_console);
 DECL_HANDLER(free_console);
-DECL_HANDLER(open_console);
 DECL_HANDLER(attach_console);
 DECL_HANDLER(get_console_wait_event);
 DECL_HANDLER(set_console_input_info);
@@ -190,9 +190,6 @@ DECL_HANDLER(get_console_input_info);
 DECL_HANDLER(append_console_input_history);
 DECL_HANDLER(get_console_input_history);
 DECL_HANDLER(create_console_output);
-DECL_HANDLER(write_console_output);
-DECL_HANDLER(read_console_output);
-DECL_HANDLER(move_console_output);
 DECL_HANDLER(send_console_signal);
 DECL_HANDLER(read_directory_changes);
 DECL_HANDLER(read_change);
@@ -365,7 +362,6 @@ DECL_HANDLER(open_symlink);
 DECL_HANDLER(query_symlink);
 DECL_HANDLER(get_object_info);
 DECL_HANDLER(get_object_type);
-DECL_HANDLER(unlink_object);
 DECL_HANDLER(get_token_impersonation_level);
 DECL_HANDLER(allocate_locally_unique_id);
 DECL_HANDLER(create_device_manager);
@@ -437,6 +433,7 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_close_handle,
     (req_handler)req_set_handle_info,
     (req_handler)req_dup_handle,
+    (req_handler)req_make_temporary,
     (req_handler)req_open_process,
     (req_handler)req_open_thread,
     (req_handler)req_select,
@@ -475,7 +472,6 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_set_socket_deferred,
     (req_handler)req_alloc_console,
     (req_handler)req_free_console,
-    (req_handler)req_open_console,
     (req_handler)req_attach_console,
     (req_handler)req_get_console_wait_event,
     (req_handler)req_set_console_input_info,
@@ -483,9 +479,6 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_append_console_input_history,
     (req_handler)req_get_console_input_history,
     (req_handler)req_create_console_output,
-    (req_handler)req_write_console_output,
-    (req_handler)req_read_console_output,
-    (req_handler)req_move_console_output,
     (req_handler)req_send_console_signal,
     (req_handler)req_read_directory_changes,
     (req_handler)req_read_change,
@@ -658,7 +651,6 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_query_symlink,
     (req_handler)req_get_object_info,
     (req_handler)req_get_object_type,
-    (req_handler)req_unlink_object,
     (req_handler)req_get_token_impersonation_level,
     (req_handler)req_allocate_locally_unique_id,
     (req_handler)req_create_device_manager,
@@ -904,6 +896,8 @@ C_ASSERT( FIELD_OFFSET(struct dup_handle_reply, handle) == 8 );
 C_ASSERT( FIELD_OFFSET(struct dup_handle_reply, self) == 12 );
 C_ASSERT( FIELD_OFFSET(struct dup_handle_reply, closed) == 16 );
 C_ASSERT( sizeof(struct dup_handle_reply) == 24 );
+C_ASSERT( FIELD_OFFSET(struct make_temporary_request, handle) == 12 );
+C_ASSERT( sizeof(struct make_temporary_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct open_process_request, pid) == 12 );
 C_ASSERT( FIELD_OFFSET(struct open_process_request, access) == 16 );
 C_ASSERT( FIELD_OFFSET(struct open_process_request, attributes) == 20 );
@@ -1114,22 +1108,10 @@ C_ASSERT( FIELD_OFFSET(struct alloc_console_request, pid) == 20 );
 C_ASSERT( FIELD_OFFSET(struct alloc_console_request, input_fd) == 24 );
 C_ASSERT( sizeof(struct alloc_console_request) == 32 );
 C_ASSERT( FIELD_OFFSET(struct alloc_console_reply, handle_in) == 8 );
-C_ASSERT( FIELD_OFFSET(struct alloc_console_reply, event) == 12 );
 C_ASSERT( sizeof(struct alloc_console_reply) == 16 );
 C_ASSERT( sizeof(struct free_console_request) == 16 );
-C_ASSERT( FIELD_OFFSET(struct open_console_request, from) == 12 );
-C_ASSERT( FIELD_OFFSET(struct open_console_request, access) == 16 );
-C_ASSERT( FIELD_OFFSET(struct open_console_request, attributes) == 20 );
-C_ASSERT( FIELD_OFFSET(struct open_console_request, share) == 24 );
-C_ASSERT( sizeof(struct open_console_request) == 32 );
-C_ASSERT( FIELD_OFFSET(struct open_console_reply, handle) == 8 );
-C_ASSERT( sizeof(struct open_console_reply) == 16 );
 C_ASSERT( FIELD_OFFSET(struct attach_console_request, pid) == 12 );
 C_ASSERT( sizeof(struct attach_console_request) == 16 );
-C_ASSERT( FIELD_OFFSET(struct attach_console_reply, std_in) == 8 );
-C_ASSERT( FIELD_OFFSET(struct attach_console_reply, std_out) == 12 );
-C_ASSERT( FIELD_OFFSET(struct attach_console_reply, std_err) == 16 );
-C_ASSERT( sizeof(struct attach_console_reply) == 24 );
 C_ASSERT( FIELD_OFFSET(struct get_console_wait_event_request, handle) == 12 );
 C_ASSERT( sizeof(struct get_console_wait_event_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct get_console_wait_event_reply, event) == 8 );
@@ -1169,33 +1151,6 @@ C_ASSERT( FIELD_OFFSET(struct create_console_output_request, fd) == 28 );
 C_ASSERT( sizeof(struct create_console_output_request) == 32 );
 C_ASSERT( FIELD_OFFSET(struct create_console_output_reply, handle_out) == 8 );
 C_ASSERT( sizeof(struct create_console_output_reply) == 16 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_request, handle) == 12 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_request, x) == 16 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_request, y) == 20 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_request, mode) == 24 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_request, wrap) == 28 );
-C_ASSERT( sizeof(struct write_console_output_request) == 32 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_reply, written) == 8 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_reply, width) == 12 );
-C_ASSERT( FIELD_OFFSET(struct write_console_output_reply, height) == 16 );
-C_ASSERT( sizeof(struct write_console_output_reply) == 24 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_request, handle) == 12 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_request, x) == 16 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_request, y) == 20 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_request, mode) == 24 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_request, wrap) == 28 );
-C_ASSERT( sizeof(struct read_console_output_request) == 32 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_reply, width) == 8 );
-C_ASSERT( FIELD_OFFSET(struct read_console_output_reply, height) == 12 );
-C_ASSERT( sizeof(struct read_console_output_reply) == 16 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, handle) == 12 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, x_src) == 16 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, y_src) == 18 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, x_dst) == 20 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, y_dst) == 22 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, w) == 24 );
-C_ASSERT( FIELD_OFFSET(struct move_console_output_request, h) == 26 );
-C_ASSERT( sizeof(struct move_console_output_request) == 32 );
 C_ASSERT( FIELD_OFFSET(struct send_console_signal_request, signal) == 12 );
 C_ASSERT( FIELD_OFFSET(struct send_console_signal_request, group_id) == 16 );
 C_ASSERT( sizeof(struct send_console_signal_request) == 24 );
@@ -2158,8 +2113,6 @@ C_ASSERT( FIELD_OFFSET(struct get_object_type_request, handle) == 12 );
 C_ASSERT( sizeof(struct get_object_type_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct get_object_type_reply, total) == 8 );
 C_ASSERT( sizeof(struct get_object_type_reply) == 16 );
-C_ASSERT( FIELD_OFFSET(struct unlink_object_request, handle) == 12 );
-C_ASSERT( sizeof(struct unlink_object_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct get_token_impersonation_level_request, handle) == 12 );
 C_ASSERT( sizeof(struct get_token_impersonation_level_request) == 16 );
 C_ASSERT( FIELD_OFFSET(struct get_token_impersonation_level_reply, impersonation_level) == 8 );

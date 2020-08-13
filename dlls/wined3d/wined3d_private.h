@@ -2814,6 +2814,7 @@ enum wined3d_pci_device
     CARD_AMD_RADEON_RX_480          = 0x67df,
     CARD_AMD_RADEON_RX_VEGA_10      = 0x687f,
     CARD_AMD_RADEON_RX_VEGA_12      = 0x69af,
+    CARD_AMD_RADEON_RAVEN           = 0x15dd,
     CARD_AMD_RADEON_RX_VEGA_20      = 0x66af,
     CARD_AMD_RADEON_RX_NAVI_10      = 0x731f,
 
@@ -3198,7 +3199,7 @@ struct wined3d_driver_info
     DWORD version_low;
 };
 
-void wined3d_driver_info_init(struct wined3d_driver_info *driver_info,
+bool wined3d_driver_info_init(struct wined3d_driver_info *driver_info,
         const struct wined3d_gpu_description *gpu_description, enum wined3d_feature_level feature_level,
         UINT64 vram_bytes, UINT64 sysmem_bytes) DECLSPEC_HIDDEN;
 

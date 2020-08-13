@@ -1591,17 +1591,19 @@ NTSTATUS WINAPI IoCreateSymbolicLink( UNICODE_STRING *name, UNICODE_STRING *targ
 {
     HANDLE handle;
     OBJECT_ATTRIBUTES attr;
+    NTSTATUS ret;
 
     attr.Length                   = sizeof(attr);
     attr.RootDirectory            = 0;
     attr.ObjectName               = name;
-    attr.Attributes               = OBJ_CASE_INSENSITIVE | OBJ_OPENIF;
+    attr.Attributes               = OBJ_CASE_INSENSITIVE | OBJ_OPENIF | OBJ_PERMANENT;
     attr.SecurityDescriptor       = NULL;
     attr.SecurityQualityOfService = NULL;
 
     TRACE( "%s -> %s\n", debugstr_us(name), debugstr_us(target) );
-    /* FIXME: store handle somewhere */
-    return NtCreateSymbolicLinkObject( &handle, SYMBOLIC_LINK_ALL_ACCESS, &attr, target );
+    if (!(ret = NtCreateSymbolicLinkObject( &handle, SYMBOLIC_LINK_ALL_ACCESS, &attr, target )))
+        NtClose( handle );
+    return ret;
 }
 
 
@@ -1612,17 +1614,19 @@ NTSTATUS WINAPI IoCreateUnprotectedSymbolicLink( UNICODE_STRING *name, UNICODE_S
 {
     HANDLE handle;
     OBJECT_ATTRIBUTES attr;
+    NTSTATUS ret;
 
     attr.Length                   = sizeof(attr);
     attr.RootDirectory            = 0;
     attr.ObjectName               = name;
-    attr.Attributes               = OBJ_CASE_INSENSITIVE | OBJ_OPENIF;
+    attr.Attributes               = OBJ_CASE_INSENSITIVE | OBJ_OPENIF | OBJ_PERMANENT;
     attr.SecurityDescriptor       = NULL;
     attr.SecurityQualityOfService = NULL;
 
     TRACE( "%s -> %s\n", debugstr_us(name), debugstr_us(target) );
-    /* FIXME: store handle somewhere */
-    return NtCreateSymbolicLinkObject( &handle, SYMBOLIC_LINK_ALL_ACCESS, &attr, target );
+    if (!(ret = NtCreateSymbolicLinkObject( &handle, SYMBOLIC_LINK_ALL_ACCESS, &attr, target )))
+        NtClose( handle );
+    return ret;
 }
 
 
@@ -1644,12 +1648,7 @@ NTSTATUS WINAPI IoDeleteSymbolicLink( UNICODE_STRING *name )
 
     if (!(status = NtOpenSymbolicLinkObject( &handle, 0, &attr )))
     {
-        SERVER_START_REQ( unlink_object )
-        {
-            req->handle = wine_server_obj_handle( handle );
-            status = wine_server_call( req );
-        }
-        SERVER_END_REQ;
+        NtMakeTemporaryObject( handle );
         NtClose( handle );
     }
     return status;
@@ -2804,6 +2803,38 @@ NTSTATUS WINAPI ObReferenceObjectByName( UNICODE_STRING *ObjectName,
     driver = WINE_RB_ENTRY_VALUE(entry, struct wine_driver, entry);
     ObReferenceObject( *Object = &driver->driver_obj );
     return STATUS_SUCCESS;
+}
+
+
+/********************************************************************
+ *           ObOpenObjectByName   (NTOSKRNL.EXE.@)
+ */
+NTSTATUS WINAPI ObOpenObjectByName(POBJECT_ATTRIBUTES attr, POBJECT_TYPE type,
+                                   KPROCESSOR_MODE mode, ACCESS_STATE *access_state,
+                                   ACCESS_MASK access, PVOID ctx, HANDLE *handle)
+{
+    NTSTATUS status;
+    void *object;
+
+    TRACE( "attr(%p %s %x) %p %u %p %u %p %p\n", attr->RootDirectory, debugstr_us(attr->ObjectName),
+                                                 attr->Attributes, type, mode, access_state, access, ctx, handle );
+
+    if (mode != KernelMode)
+    {
+        FIXME( "UserMode access not implemented\n" );
+        return STATUS_NOT_IMPLEMENTED;
+    }
+
+    if (attr->RootDirectory) FIXME( "RootDirectory unhandled\n" );
+
+    status = ObReferenceObjectByName(attr->ObjectName, attr->Attributes, access_state, access, type, mode, ctx, &object );
+    if (status != STATUS_SUCCESS)
+        return status;
+
+    status = ObOpenObjectByPointer(object, attr->Attributes, access_state, access, type, mode, handle);
+
+    ObDereferenceObject(object);
+    return status;
 }
 
 

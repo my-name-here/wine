@@ -529,6 +529,7 @@
 @ stdcall KeAcquireSpinLockAtDpcLevel(ptr)
 @ stdcall -arch=!i386 KeAcquireSpinLockRaiseToDpc(ptr)
 @ stub KeAddSystemServiceTable
+@ stdcall KeAlertThread(ptr long)
 @ stdcall KeAreApcsDisabled()
 @ stub KeAttachProcess
 @ stdcall KeBugCheck(long)
@@ -564,7 +565,7 @@
 @ stub KeI386ReleaseLid
 @ stub KeI386SetGdtSelector
 @ stub KeIcacheFlushCount
-@ stub KeInitializeApc
+@ stdcall KeInitializeApc(ptr ptr long ptr ptr ptr long ptr)
 @ stub KeInitializeDeviceQueue
 @ stdcall KeInitializeDpc(ptr ptr ptr)
 @ stdcall KeInitializeEvent(ptr long long)
@@ -599,7 +600,7 @@
 @ stdcall KeQueryTickCount(ptr)
 @ stdcall KeQueryTimeIncrement()
 @ stub KeRaiseUserException
-@ stub KeReadStateEvent
+@ stdcall KeReadStateEvent(ptr)
 @ stub KeReadStateMutant
 @ stub KeReadStateMutex
 @ stub KeReadStateQueue
@@ -647,6 +648,7 @@
 @ stdcall KeStackAttachProcess(ptr ptr)
 @ stub KeSynchronizeExecution
 @ stub KeTerminateThread
+@ stdcall KeTestAlertThread(long)
 @ extern KeTickCount
 @ stdcall KeUnstackDetachProcess(ptr)
 @ stub KeUpdateRunTime
@@ -835,7 +837,7 @@
 @ stub ObInsertObject
 @ stub ObLogSecurityDescriptor
 @ stub ObMakeTemporaryObject
-@ stub ObOpenObjectByName
+@ stdcall ObOpenObjectByName(ptr ptr long ptr long ptr ptr)
 @ stdcall ObOpenObjectByPointer(ptr long ptr long ptr long ptr)
 @ stdcall ObQueryNameString(ptr ptr long ptr)
 @ stub ObQueryObjectAuditingByHandle
@@ -1378,7 +1380,7 @@
 @ stdcall ZwClose(long) NtClose
 @ stub ZwCloseObjectAuditAlarm
 @ stdcall -private ZwConnectPort(ptr ptr ptr ptr ptr ptr ptr ptr) NtConnectPort
-@ stdcall -private ZwCreateDirectoryObject(ptr long ptr) NtCreateDirectoryObject
+@ stdcall ZwCreateDirectoryObject(ptr long ptr) NtCreateDirectoryObject
 @ stdcall ZwCreateEvent(ptr long ptr long long) NtCreateEvent
 @ stdcall ZwCreateFile(ptr long ptr ptr ptr long long long long ptr long) NtCreateFile
 @ stdcall -private ZwCreateIoCompletion(ptr long ptr long) NtCreateIoCompletion
@@ -1412,11 +1414,11 @@
 @ stdcall -private ZwLoadKey(ptr ptr) NtLoadKey
 @ stdcall -private ZwLockFile(long long ptr ptr ptr ptr ptr ptr long long) NtLockFile
 @ stdcall -private ZwLockVirtualMemory(long ptr ptr long) NtLockVirtualMemory
-@ stdcall -private ZwMakeTemporaryObject(long) NtMakeTemporaryObject
+@ stdcall ZwMakeTemporaryObject(long) NtMakeTemporaryObject
 @ stdcall -private ZwMapViewOfSection(long long ptr long long ptr ptr long long long) NtMapViewOfSection
 @ stdcall -private ZwNotifyChangeDirectoryFile(long long ptr ptr ptr ptr long long long) NtNotifyChangeDirectoryFile
 @ stdcall -private ZwNotifyChangeKey(long long ptr ptr ptr long long ptr long long) NtNotifyChangeKey
-@ stdcall -private ZwOpenDirectoryObject(ptr long ptr) NtOpenDirectoryObject
+@ stdcall ZwOpenDirectoryObject(ptr long ptr) NtOpenDirectoryObject
 @ stdcall -private ZwOpenEvent(ptr long ptr) NtOpenEvent
 @ stdcall ZwOpenFile(ptr long ptr ptr long long) NtOpenFile
 @ stdcall -private ZwOpenJobObject(ptr long ptr) NtOpenJobObject

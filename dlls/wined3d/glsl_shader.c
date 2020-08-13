@@ -1037,7 +1037,7 @@ static void shader_glsl_init_transform_feedback(const struct wined3d_context_gl 
 }
 
 /* Context activation is done by the caller. */
-static inline void walk_constant_heap(const struct wined3d_gl_info *gl_info, const struct wined3d_vec4 *constants,
+static void walk_constant_heap(const struct wined3d_gl_info *gl_info, const struct wined3d_vec4 *constants,
         const GLint *constant_locations, const struct constant_heap *heap, unsigned char *stack, DWORD version)
 {
     unsigned int start = ~0U, end = 0;
@@ -1111,7 +1111,7 @@ static inline void walk_constant_heap(const struct wined3d_gl_info *gl_info, con
 }
 
 /* Context activation is done by the caller. */
-static inline void apply_clamped_constant(const struct wined3d_gl_info *gl_info,
+static void apply_clamped_constant(const struct wined3d_gl_info *gl_info,
         GLint location, const struct wined3d_vec4 *data)
 {
     GLfloat clamped_constant[4];
@@ -1127,7 +1127,7 @@ static inline void apply_clamped_constant(const struct wined3d_gl_info *gl_info,
 }
 
 /* Context activation is done by the caller. */
-static inline void walk_constant_heap_clamped(const struct wined3d_gl_info *gl_info,
+static void walk_constant_heap_clamped(const struct wined3d_gl_info *gl_info,
         const struct wined3d_vec4 *constants, const GLint *constant_locations,
         const struct constant_heap *heap, unsigned char *stack, DWORD version)
 {
@@ -6053,10 +6053,9 @@ static void shader_glsl_sample(const struct wined3d_shader_instruction *ins)
     shader_glsl_release_sample_function(ins->ctx, &sample_function);
 }
 
-/* GLSL doesn't provide a function to sample from level zero with depth
- * comparison for array textures and cube textures. We use textureGrad*()
- * to implement sample_c_lz.
- */
+/* Unless EXT_texture_shadow_lod is available, GLSL doesn't provide a function
+ * to sample from level zero with depth comparison for array textures and cube
+ * textures. We use textureGrad*() to implement sample_c_lz in that case. */
 static void shader_glsl_gen_sample_c_lz_emulation(const struct wined3d_shader_instruction *ins,
         unsigned int sampler_bind_idx, const struct glsl_sample_function *sample_function,
         unsigned int coord_size, const char *coord_param, const char *ref_param)
@@ -8537,7 +8536,7 @@ static GLuint find_glsl_fragment_shader(const struct wined3d_context_gl *context
     return ret;
 }
 
-static inline BOOL vs_args_equal(const struct vs_compile_args *stored, const struct vs_compile_args *new,
+static BOOL vs_args_equal(const struct vs_compile_args *stored, const struct vs_compile_args *new,
         const DWORD use_map)
 {
     if ((stored->swizzle_map & use_map) != new->swizzle_map)

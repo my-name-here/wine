@@ -28,7 +28,7 @@ static HINSTANCE qdvd_instance;
 struct class_factory
 {
     IClassFactory IClassFactory_iface;
-    HRESULT (*create_instance)(IUnknown **out);
+    HRESULT (*create_instance)(IUnknown *outer, IUnknown **out);
 };
 
 static struct class_factory *impl_from_IClassFactory(IClassFactory *iface)
@@ -73,10 +73,10 @@ static HRESULT WINAPI class_factory_CreateInstance(IClassFactory *iface,
 
     *out = NULL;
 
-    if (outer)
-        return CLASS_E_NOAGGREGATION;
+    if (outer && !IsEqualGUID(iid, &IID_IUnknown))
+        return E_NOINTERFACE;
 
-    if (SUCCEEDED(hr = factory->create_instance(&unk)))
+    if (SUCCEEDED(hr = factory->create_instance(outer, &unk)))
     {
         hr = IUnknown_QueryInterface(unk, iid, out);
         IUnknown_Release(unk);
@@ -100,6 +100,7 @@ static const IClassFactoryVtbl class_factory_vtbl =
 };
 
 static struct class_factory graph_builder_cf = {{&class_factory_vtbl}, graph_builder_create};
+static struct class_factory navigator_cf = {{&class_factory_vtbl}, navigator_create};
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {
@@ -120,6 +121,8 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
 
     if (IsEqualGUID(clsid, &CLSID_DvdGraphBuilder))
         return IClassFactory_QueryInterface(&graph_builder_cf.IClassFactory_iface, iid, out);
+    if (IsEqualGUID(clsid, &CLSID_DVDNavigator))
+        return IClassFactory_QueryInterface(&navigator_cf.IClassFactory_iface, iid, out);
 
     FIXME("%s not available, returning CLASS_E_CLASSNOTAVAILABLE.\n", debugstr_guid(clsid));
     return CLASS_E_CLASSNOTAVAILABLE;

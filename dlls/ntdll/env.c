@@ -513,7 +513,7 @@ done:
 
 failed:
     MESSAGE( "wine: cannot find %s\n", debugstr_w(name) );
-    RtlExitUserProcess( GetLastError() );
+    RtlExitUserProcess( STATUS_DLL_NOT_FOUND );
 }
 
 
@@ -606,28 +606,6 @@ static void build_command_line( WCHAR **argv, UNICODE_STRING *cmdline )
     cmdline->MaximumLength = cmdline->Length + sizeof(WCHAR);
 }
 
-
-/******************************************************************************
- *  NtQuerySystemEnvironmentValue		[NTDLL.@]
- */
-NTSYSAPI NTSTATUS WINAPI NtQuerySystemEnvironmentValue(PUNICODE_STRING VariableName,
-                                                       PWCHAR Value,
-                                                       ULONG ValueBufferLength,
-                                                       PULONG RequiredLength)
-{
-    FIXME("(%s, %p, %u, %p), stub\n", debugstr_us(VariableName), Value, ValueBufferLength, RequiredLength);
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-/******************************************************************************
- *  NtQuerySystemEnvironmentValueEx		[NTDLL.@]
- */
-NTSYSAPI NTSTATUS WINAPI NtQuerySystemEnvironmentValueEx(PUNICODE_STRING name, LPGUID vendor,
-                                                         PVOID value, PULONG retlength, PULONG attrib)
-{
-    FIXME("(%s, %s, %p, %p, %p), stub\n", debugstr_us(name), debugstr_guid(vendor), value, retlength, attrib);
-    return STATUS_NOT_IMPLEMENTED;
-}
 
 /******************************************************************************
  *  RtlCreateEnvironment		[NTDLL.@]

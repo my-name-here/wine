@@ -225,10 +225,6 @@ enum i386_trap_code
     TRAP_x86_CACHEFLT   = 19   /* Cache flush exception */
 };
 
-static const size_t teb_size = 0x2000;  /* we reserve two pages for the TEB */
-
-typedef void (*raise_func)( EXCEPTION_RECORD *rec, CONTEXT *context );
-
 /* stack layout when calling an exception raise function */
 struct stack_layout
 {
@@ -244,23 +240,43 @@ struct stack_layout
 
 C_ASSERT( sizeof(struct stack_layout) == 0x630 ); /* Should match the size in call_user_exception_dispatcher(). */
 
-struct amd64_thread_data
+struct syscall_frame
 {
-    DWORD_PTR dr0;           /* debug registers */
-    DWORD_PTR dr1;
-    DWORD_PTR dr2;
-    DWORD_PTR dr3;
-    DWORD_PTR dr6;
-    DWORD_PTR dr7;
-    void     *exit_frame;    /* exit frame pointer */
+    struct syscall_frame *prev_frame;
+    ULONG64               pad;
+    ULONG64               xmm[10 * 2];  /* xmm6-xmm15 */
+    ULONG64               mxcsr;
+    ULONG64               r12;
+    ULONG64               r13;
+    ULONG64               r14;
+    ULONG64               r15;
+    ULONG64               rdi;
+    ULONG64               rsi;
+    ULONG64               rbx;
+    ULONG64               rbp;
+    ULONG64               thunk_addr;
+    ULONG64               ret_addr;
 };
 
-C_ASSERT( sizeof(struct amd64_thread_data) <= sizeof(((TEB *)0)->SystemReserved2) );
-C_ASSERT( offsetof( TEB, SystemReserved2 ) + offsetof( struct amd64_thread_data, exit_frame ) == 0x330 );
+struct amd64_thread_data
+{
+    DWORD_PTR             dr0;           /* 02f0 debug registers */
+    DWORD_PTR             dr1;           /* 02f8 */
+    DWORD_PTR             dr2;           /* 0300 */
+    DWORD_PTR             dr3;           /* 0308 */
+    DWORD_PTR             dr6;           /* 0310 */
+    DWORD_PTR             dr7;           /* 0318 */
+    void                 *exit_frame;    /* 0320 exit frame pointer */
+    struct syscall_frame *syscall_frame; /* 0328 syscall frame pointer */
+};
+
+C_ASSERT( sizeof(struct amd64_thread_data) <= sizeof(((struct ntdll_thread_data *)0)->cpu_data) );
+C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, exit_frame ) == 0x320 );
+C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct amd64_thread_data, syscall_frame ) == 0x328 );
 
 static inline struct amd64_thread_data *amd64_thread_data(void)
 {
-    return (struct amd64_thread_data *)NtCurrentTeb()->SystemReserved2;
+    return (struct amd64_thread_data *)ntdll_get_thread_data()->cpu_data;
 }
 
 
@@ -1380,29 +1396,6 @@ static inline void set_sigcontext( const CONTEXT *context, ucontext_t *sigcontex
 
 
 /***********************************************************************
- *           get_signal_stack
- *
- * Get the base of the signal stack for the current thread.
- */
-static inline void *get_signal_stack(void)
-{
-    return (char *)NtCurrentTeb() + teb_size;
-}
-
-
-/***********************************************************************
- *           is_inside_signal_stack
- *
- * Check if pointer is inside the signal stack.
- */
-static inline BOOL is_inside_signal_stack( void *ptr )
-{
-    return ((char *)ptr >= (char *)get_signal_stack() &&
-            (char *)ptr < (char *)get_signal_stack() + signal_stack_size);
-}
-
-
-/***********************************************************************
  *           save_context
  *
  * Set the register values from a sigcontext.
@@ -1552,64 +1545,6 @@ static unsigned int get_server_context_flags( DWORD flags )
     if (flags & CONTEXT_FLOATING_POINT) ret |= SERVER_CTX_FLOATING_POINT;
     if (flags & CONTEXT_DEBUG_REGISTERS) ret |= SERVER_CTX_DEBUG_REGISTERS;
     return ret;
-}
-
-
-/***********************************************************************
- *           copy_context
- *
- * Copy a register context according to the flags.
- */
-static void copy_context( CONTEXT *to, const CONTEXT *from, DWORD flags )
-{
-    flags &= ~CONTEXT_AMD64;  /* get rid of CPU id */
-    if (flags & CONTEXT_CONTROL)
-    {
-        to->Rbp    = from->Rbp;
-        to->Rip    = from->Rip;
-        to->Rsp    = from->Rsp;
-        to->SegCs  = from->SegCs;
-        to->SegSs  = from->SegSs;
-        to->EFlags = from->EFlags;
-    }
-    if (flags & CONTEXT_INTEGER)
-    {
-        to->Rax = from->Rax;
-        to->Rcx = from->Rcx;
-        to->Rdx = from->Rdx;
-        to->Rbx = from->Rbx;
-        to->Rsi = from->Rsi;
-        to->Rdi = from->Rdi;
-        to->R8  = from->R8;
-        to->R9  = from->R9;
-        to->R10 = from->R10;
-        to->R11 = from->R11;
-        to->R12 = from->R12;
-        to->R13 = from->R13;
-        to->R14 = from->R14;
-        to->R15 = from->R15;
-    }
-    if (flags & CONTEXT_SEGMENTS)
-    {
-        to->SegDs = from->SegDs;
-        to->SegEs = from->SegEs;
-        to->SegFs = from->SegFs;
-        to->SegGs = from->SegGs;
-    }
-    if (flags & CONTEXT_FLOATING_POINT)
-    {
-        to->MxCsr = from->MxCsr;
-        to->u.FltSave = from->u.FltSave;
-    }
-    if (flags & CONTEXT_DEBUG_REGISTERS)
-    {
-        to->Dr0 = from->Dr0;
-        to->Dr1 = from->Dr1;
-        to->Dr2 = from->Dr2;
-        to->Dr3 = from->Dr3;
-        to->Dr6 = from->Dr6;
-        to->Dr7 = from->Dr7;
-    }
 }
 
 
@@ -1803,11 +1738,12 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
 {
     NTSTATUS ret;
     DWORD needed_flags;
+    struct syscall_frame *frame = amd64_thread_data()->syscall_frame;
     BOOL self = (handle == GetCurrentThread());
 
     if (!context) return STATUS_INVALID_PARAMETER;
 
-    needed_flags = context->ContextFlags;
+    needed_flags = context->ContextFlags & ~CONTEXT_AMD64;
 
     /* debug registers require a server call */
     if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64)) self = FALSE;
@@ -1824,12 +1760,49 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
 
     if (self)
     {
-        if (needed_flags)
+        if (needed_flags & CONTEXT_INTEGER)
         {
-            CONTEXT ctx;
-            RtlCaptureContext( &ctx );
-            copy_context( context, &ctx, ctx.ContextFlags & needed_flags );
-            context->ContextFlags |= ctx.ContextFlags & needed_flags;
+            context->Rax = 0;
+            context->Rbx = frame->rbx;
+            context->Rcx = 0;
+            context->Rdx = 0;
+            context->Rsi = frame->rsi;
+            context->Rdi = frame->rdi;
+            context->R8  = 0;
+            context->R9  = 0;
+            context->R10 = 0;
+            context->R11 = 0;
+            context->R12 = frame->r12;
+            context->R13 = frame->r13;
+            context->R14 = frame->r14;
+            context->R15 = frame->r15;
+            context->ContextFlags |= CONTEXT_INTEGER;
+        }
+        if (needed_flags & CONTEXT_CONTROL)
+        {
+            context->Rsp    = (ULONG64)&frame->ret_addr;
+            context->Rbp    = frame->rbp;
+            context->Rip    = frame->thunk_addr;
+            context->EFlags = 0x202;
+            __asm__( "movw %%cs,%0" : "=g" (context->SegCs) );
+            __asm__( "movw %%ss,%0" : "=g" (context->SegSs) );
+            context->ContextFlags |= CONTEXT_CONTROL;
+        }
+        if (needed_flags & CONTEXT_SEGMENTS)
+        {
+            __asm__( "movw %%ds,%0" : "=g" (context->SegDs) );
+            __asm__( "movw %%es,%0" : "=g" (context->SegEs) );
+            __asm__( "movw %%fs,%0" : "=g" (context->SegFs) );
+            __asm__( "movw %%gs,%0" : "=g" (context->SegGs) );
+            context->ContextFlags |= CONTEXT_SEGMENTS;
+        }
+        if (needed_flags & CONTEXT_FLOATING_POINT)
+        {
+            __asm__( "fxsave %0" : "=m" (context->u.FltSave) );
+            context->MxCsr = frame->mxcsr;
+            memset( &context->u.s.Xmm0, 0, 6 * sizeof(context->u.s.Xmm0) );
+            memcpy( &context->u.s.Xmm6, frame->xmm, 10 * sizeof(context->u.s.Xmm0) );
+            context->ContextFlags |= CONTEXT_FLOATING_POINT;
         }
         /* update the cached version of the debug registers */
         if (context->ContextFlags & (CONTEXT_DEBUG_REGISTERS & ~CONTEXT_AMD64))
@@ -1846,10 +1819,57 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
 }
 
 
-extern void CDECL raise_func_trampoline( raise_func func );
+extern void CDECL raise_func_trampoline( void *dispatcher );
 
 __ASM_GLOBAL_FUNC( raise_func_trampoline,
                    "jmpq *%r8\n\t")
+
+/***********************************************************************
+ *           setup_raise_exception
+ */
+static void setup_raise_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec, CONTEXT *context )
+{
+    void *stack_ptr = (void *)(RSP_sig(sigcontext) & ~15);
+    struct stack_layout *stack;
+    NTSTATUS status;
+
+    if (rec->ExceptionCode == EXCEPTION_SINGLE_STEP)
+    {
+        /* when single stepping can't tell whether this is a hw bp or a
+         * single step interrupt. try to avoid as much overhead as possible
+         * and only do a server call if there is any hw bp enabled. */
+
+        if (!(context->EFlags & 0x100) || (context->Dr7 & 0xff))
+        {
+            /* (possible) hardware breakpoint, fetch the debug registers */
+            DWORD saved_flags = context->ContextFlags;
+            context->ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            NtGetContextThread(GetCurrentThread(), context);
+            context->ContextFlags |= saved_flags;  /* restore flags */
+        }
+        context->EFlags &= ~0x100;  /* clear single-step flag */
+    }
+
+    status = send_debug_event( rec, context, TRUE );
+    if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
+    {
+        restore_context( context, sigcontext );
+        return;
+    }
+
+    /* fix up instruction pointer in context for EXCEPTION_BREAKPOINT */
+    if (rec->ExceptionCode == EXCEPTION_BREAKPOINT) context->Rip--;
+
+    stack = virtual_setup_exception( stack_ptr, sizeof(*stack), rec );
+    stack->rec          = *rec;
+    stack->context      = *context;
+    RIP_sig(sigcontext) = (ULONG_PTR)raise_func_trampoline;
+    R8_sig(sigcontext)  = (ULONG_PTR)pKiUserExceptionDispatcher;
+    RSP_sig(sigcontext) = (ULONG_PTR)stack;
+    /* clear single-step, direction, and align check flag */
+    EFL_sig(sigcontext) &= ~(0x100|0x400|0x40000);
+}
+
 
 /***********************************************************************
  *           setup_exception
@@ -1858,119 +1878,69 @@ __ASM_GLOBAL_FUNC( raise_func_trampoline,
  * sigcontext so that the return from the signal handler will call
  * the raise function.
  */
-static struct stack_layout *setup_exception( ucontext_t *sigcontext )
+static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
 {
-    struct stack_layout *stack;
-    DWORD exception_code = 0;
+    CONTEXT context;
 
-    stack = (struct stack_layout *)(RSP_sig(sigcontext) & ~15);
-
-    /* stack sanity checks */
-
-    if (is_inside_signal_stack( stack ))
-    {
-        ERR( "nested exception on signal stack in thread %04x eip %016lx esp %016lx stack %p-%p\n",
-             GetCurrentThreadId(), (ULONG_PTR)RIP_sig(sigcontext), (ULONG_PTR)RSP_sig(sigcontext),
-             NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
-        abort_thread(1);
-    }
-
-    if (stack - 1 > stack || /* check for overflow in subtraction */
-        (char *)stack <= (char *)NtCurrentTeb()->DeallocationStack ||
-        (char *)stack > (char *)NtCurrentTeb()->Tib.StackBase)
-    {
-        WARN( "exception outside of stack limits in thread %04x eip %016lx esp %016lx stack %p-%p\n",
-              GetCurrentThreadId(), (ULONG_PTR)RIP_sig(sigcontext), (ULONG_PTR)RSP_sig(sigcontext),
-              NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
-    }
-    else if ((char *)(stack - 1) < (char *)NtCurrentTeb()->DeallocationStack + 4096)
-    {
-        /* stack overflow on last page, unrecoverable */
-        UINT diff = (char *)NtCurrentTeb()->DeallocationStack + 4096 - (char *)(stack - 1);
-        ERR( "stack overflow %u bytes in thread %04x eip %016lx esp %016lx stack %p-%p-%p\n",
-             diff, GetCurrentThreadId(), (ULONG_PTR)RIP_sig(sigcontext),
-             (ULONG_PTR)RSP_sig(sigcontext), NtCurrentTeb()->DeallocationStack,
-             NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
-        abort_thread(1);
-    }
-    else if ((char *)(stack - 1) < (char *)NtCurrentTeb()->Tib.StackLimit)
-    {
-        /* stack access below stack limit, may be recoverable */
-        switch (virtual_handle_stack_fault( stack - 1 ))
-        {
-        case 0:  /* not handled */
-        {
-            UINT diff = (char *)NtCurrentTeb()->Tib.StackLimit - (char *)(stack - 1);
-            ERR( "stack overflow %u bytes in thread %04x eip %016lx esp %016lx stack %p-%p-%p\n",
-                 diff, GetCurrentThreadId(), (ULONG_PTR)RIP_sig(sigcontext),
-                 (ULONG_PTR)RSP_sig(sigcontext), NtCurrentTeb()->DeallocationStack,
-                 NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
-            abort_thread(1);
-        }
-        case -1:  /* overflow */
-            exception_code = EXCEPTION_STACK_OVERFLOW;
-            break;
-        }
-    }
-
-    stack--;  /* push the stack_layout structure */
-#if defined(VALGRIND_MAKE_MEM_UNDEFINED)
-    VALGRIND_MAKE_MEM_UNDEFINED(stack, sizeof(*stack));
-#elif defined(VALGRIND_MAKE_WRITABLE)
-    VALGRIND_MAKE_WRITABLE(stack, sizeof(*stack));
-#endif
-    stack->rec.ExceptionRecord  = NULL;
-    stack->rec.ExceptionCode    = exception_code;
-    stack->rec.ExceptionFlags   = EXCEPTION_CONTINUABLE;
-    stack->rec.ExceptionAddress = (void *)RIP_sig(sigcontext);
-    stack->rec.NumberParameters = 0;
-    save_context( &stack->context, sigcontext );
-
-    return stack;
+    rec->ExceptionAddress = (void *)RIP_sig(sigcontext);
+    save_context( &context, sigcontext );
+    setup_raise_exception( sigcontext, rec, &context );
 }
 
-static void setup_raise_exception( ucontext_t *sigcontext, struct stack_layout *stack )
+
+/***********************************************************************
+ *           call_user_apc
+ */
+void WINAPI call_user_apc( CONTEXT *context_ptr, ULONG_PTR ctx, ULONG_PTR arg1,
+                           ULONG_PTR arg2, PNTAPCFUNC func )
 {
-    NTSTATUS status;
+    CONTEXT context;
 
-    if (stack->rec.ExceptionCode == EXCEPTION_SINGLE_STEP)
+    if (!context_ptr)
     {
-        /* when single stepping can't tell whether this is a hw bp or a
-         * single step interrupt. try to avoid as much overhead as possible
-         * and only do a server call if there is any hw bp enabled. */
-
-        if (!(stack->context.EFlags & 0x100) || (stack->context.Dr7 & 0xff))
-        {
-            /* (possible) hardware breakpoint, fetch the debug registers */
-            DWORD saved_flags = stack->context.ContextFlags;
-            stack->context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-            NtGetContextThread(GetCurrentThread(), &stack->context);
-            stack->context.ContextFlags |= saved_flags;  /* restore flags */
-        }
-
-        stack->context.EFlags &= ~0x100;  /* clear single-step flag */
+        context.ContextFlags = CONTEXT_FULL;
+        NtGetContextThread( GetCurrentThread(), &context );
+        context.Rax = STATUS_USER_APC;
+        context_ptr = &context;
     }
-
-    status = send_debug_event( &stack->rec, &stack->context, TRUE );
-    if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
-    {
-        restore_context( &stack->context, sigcontext );
-        return;
-    }
-
-    if (stack->rec.ExceptionCode == EXCEPTION_BREAKPOINT)
-    {
-        /* fix up instruction pointer in context for EXCEPTION_BREAKPOINT */
-        stack->context.Rip--;
-    }
-
-    /* now modify the sigcontext to return to the raise function */
-    RIP_sig(sigcontext) = (ULONG_PTR)raise_func_trampoline;
-    R8_sig(sigcontext)  = (ULONG_PTR)pKiUserExceptionDispatcher;
-    RSP_sig(sigcontext) = (ULONG_PTR)stack;
-    /* clear single-step, direction, and align check flag */
-    EFL_sig(sigcontext) &= ~(0x100|0x400|0x40000);
+    pKiUserApcDispatcher( context_ptr, ctx, arg1, arg2, func );
 }
+
+
+/***********************************************************************
+ *           call_raise_user_exception_dispatcher
+ */
+__ASM_GLOBAL_FUNC( call_raise_user_exception_dispatcher,
+                   "movq %gs:0x30,%rdx\n\t"
+                   "movq 0x328(%rdx),%rax\n\t"    /* amd64_thread_data()->syscall_frame */
+                   "pushq (%rax)\n\t"             /* frame->prev_frame */
+                   "popq 0x328(%rdx)\n\t"
+                   "movdqu 0x10(%rax),%xmm6\n\t"  /* frame->xmm[0..19 */
+                   "movdqu 0x20(%rax),%xmm7\n\t"
+                   "movdqu 0x30(%rax),%xmm8\n\t"
+                   "movdqu 0x40(%rax),%xmm9\n\t"
+                   "movdqu 0x50(%rax),%xmm10\n\t"
+                   "movdqu 0x60(%rax),%xmm11\n\t"
+                   "movdqu 0x70(%rax),%xmm12\n\t"
+                   "movdqu 0x80(%rax),%xmm13\n\t"
+                   "movdqu 0x90(%rax),%xmm14\n\t"
+                   "movdqu 0xa0(%rax),%xmm15\n\t"
+                   "ldmxcsr 0xb0(%rax)\n\t"       /* frame->mxcsr */
+                   "movq 0xb8(%rax),%r12\n\t"     /* frame->r12 */
+                   "movq 0xc0(%rax),%r13\n\t"     /* frame->r13 */
+                   "movq 0xc8(%rax),%r14\n\t"     /* frame->r14 */
+                   "movq 0xd0(%rax),%r15\n\t"     /* frame->r15 */
+                   "movq 0xd8(%rax),%rdi\n\t"     /* frame->rdi */
+                   "movq 0xe0(%rax),%rsi\n\t"     /* frame->rsi */
+                   "movq 0xe8(%rax),%rbx\n\t"     /* frame->rbx */
+                   "movq 0xf0(%rax),%rbp\n\t"     /* frame->rbp */
+                   "leaq 0x100(%rax),%rsp\n\t"
+                   "jmpq *%rcx" )
+
+
+/***********************************************************************
+ *           call_user_exception_dispatcher
+ */
 
 extern void WINAPI user_exception_dispatcher_trampoline( struct stack_layout *stack,
         void *pKiUserExceptionDispatcher );
@@ -1987,15 +1957,15 @@ void WINAPI do_call_user_exception_dispatcher( EXCEPTION_RECORD *rec, CONTEXT *c
                                                NTSTATUS (WINAPI *dispatcher)(EXCEPTION_RECORD*,CONTEXT*),
                                                struct stack_layout *stack )
 {
+    struct syscall_frame *frame = amd64_thread_data()->syscall_frame;
+
     memmove(&stack->context, context, sizeof(*context));
     memcpy(&stack->rec, rec, sizeof(*rec));
 
-    if (stack->rec.ExceptionCode == EXCEPTION_BREAKPOINT)
-    {
-        /* fix up instruction pointer in context for EXCEPTION_BREAKPOINT */
-        stack->context.Rip--;
-    }
+    /* fix up instruction pointer in context for EXCEPTION_BREAKPOINT */
+    if (stack->rec.ExceptionCode == EXCEPTION_BREAKPOINT) stack->context.Rip--;
 
+    amd64_thread_data()->syscall_frame = frame->prev_frame;
     user_exception_dispatcher_trampoline( stack, dispatcher );
 }
 
@@ -2094,15 +2064,15 @@ static inline DWORD is_privileged_instr( CONTEXT *context )
  *
  * Handle an interrupt.
  */
-static inline BOOL handle_interrupt( ucontext_t *sigcontext, struct stack_layout *stack )
+static inline BOOL handle_interrupt( ucontext_t *sigcontext, EXCEPTION_RECORD *rec, CONTEXT *context )
 {
     switch (ERROR_sig(sigcontext) >> 3)
     {
     case 0x2c:
-        stack->rec.ExceptionCode = STATUS_ASSERTION_FAILURE;
+        rec->ExceptionCode = STATUS_ASSERTION_FAILURE;
         break;
     case 0x2d:
-        switch (stack->context.Rax)
+        switch (context->Rax)
         {
             case 1: /* BREAKPOINT_PRINT */
             case 3: /* BREAKPOINT_LOAD_SYMBOLS */
@@ -2111,16 +2081,16 @@ static inline BOOL handle_interrupt( ucontext_t *sigcontext, struct stack_layout
                 RIP_sig(sigcontext) += 3;
                 return TRUE;
         }
-        stack->context.Rip += 3;
-        stack->rec.ExceptionCode = EXCEPTION_BREAKPOINT;
-        stack->rec.ExceptionAddress = (void *)stack->context.Rip;
-        stack->rec.NumberParameters = 1;
-        stack->rec.ExceptionInformation[0] = stack->context.Rax;
+        context->Rip += 3;
+        rec->ExceptionCode = EXCEPTION_BREAKPOINT;
+        rec->ExceptionAddress = (void *)context->Rip;
+        rec->NumberParameters = 1;
+        rec->ExceptionInformation[0] = context->Rax;
         break;
     default:
         return FALSE;
     }
-    setup_raise_exception( sigcontext, stack );
+    setup_raise_exception( sigcontext, rec, context );
     return TRUE;
 }
 
@@ -2132,71 +2102,49 @@ static inline BOOL handle_interrupt( ucontext_t *sigcontext, struct stack_layout
  */
 static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
-    struct stack_layout *stack;
+    EXCEPTION_RECORD rec = { 0 };
+    CONTEXT context;
     ucontext_t *ucontext = sigcontext;
 
-    stack = (struct stack_layout *)(RSP_sig(ucontext) & ~15);
-
-    /* check for exceptions on the signal stack caused by write watches */
-    if (TRAP_sig(ucontext) == TRAP_x86_PAGEFLT && is_inside_signal_stack( stack ) &&
-        !virtual_handle_fault( siginfo->si_addr, (ERROR_sig(ucontext) >> 1) & 0x09, TRUE ))
-    {
-        return;
-    }
-
-    /* check for page fault inside the thread stack */
-    if (TRAP_sig(ucontext) == TRAP_x86_PAGEFLT)
-    {
-        switch (virtual_handle_stack_fault( siginfo->si_addr ))
-        {
-        case 1:  /* handled */
-            return;
-        case -1:  /* overflow */
-            stack = setup_exception( sigcontext );
-            stack->rec.ExceptionCode = EXCEPTION_STACK_OVERFLOW;
-            goto done;
-        }
-    }
-
-    stack = setup_exception( sigcontext );
-    if (stack->rec.ExceptionCode == EXCEPTION_STACK_OVERFLOW) goto done;
+    rec.ExceptionAddress = (void *)RIP_sig(ucontext);
+    save_context( &context, sigcontext );
 
     switch(TRAP_sig(ucontext))
     {
     case TRAP_x86_OFLOW:   /* Overflow exception */
-        stack->rec.ExceptionCode = EXCEPTION_INT_OVERFLOW;
+        rec.ExceptionCode = EXCEPTION_INT_OVERFLOW;
         break;
     case TRAP_x86_BOUND:   /* Bound range exception */
-        stack->rec.ExceptionCode = EXCEPTION_ARRAY_BOUNDS_EXCEEDED;
+        rec.ExceptionCode = EXCEPTION_ARRAY_BOUNDS_EXCEEDED;
         break;
     case TRAP_x86_PRIVINFLT:   /* Invalid opcode exception */
-        stack->rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
+        rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
         break;
     case TRAP_x86_STKFLT:  /* Stack fault */
-        stack->rec.ExceptionCode = EXCEPTION_STACK_OVERFLOW;
+        rec.ExceptionCode = EXCEPTION_STACK_OVERFLOW;
         break;
     case TRAP_x86_SEGNPFLT:  /* Segment not present exception */
     case TRAP_x86_PROTFLT:   /* General protection fault */
         {
             WORD err = ERROR_sig(ucontext);
-            if (!err && (stack->rec.ExceptionCode = is_privileged_instr( &stack->context ))) break;
-            if ((err & 7) == 2 && handle_interrupt( ucontext, stack )) return;
-            stack->rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
-            stack->rec.NumberParameters = 2;
-            stack->rec.ExceptionInformation[0] = 0;
-            stack->rec.ExceptionInformation[1] = 0xffffffffffffffff;
+            if (!err && (rec.ExceptionCode = is_privileged_instr( &context ))) break;
+            if ((err & 7) == 2 && handle_interrupt( ucontext, &rec, &context )) return;
+            rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+            rec.NumberParameters = 2;
+            rec.ExceptionInformation[0] = 0;
+            rec.ExceptionInformation[1] = 0xffffffffffffffff;
         }
         break;
     case TRAP_x86_PAGEFLT:  /* Page fault */
-        stack->rec.NumberParameters = 2;
-        stack->rec.ExceptionInformation[0] = (ERROR_sig(ucontext) >> 1) & 0x09;
-        stack->rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
-        if (!(stack->rec.ExceptionCode = virtual_handle_fault((void *)stack->rec.ExceptionInformation[1],
-                                                              stack->rec.ExceptionInformation[0], FALSE )))
-            return;
+        rec.NumberParameters = 2;
+        rec.ExceptionInformation[0] = (ERROR_sig(ucontext) >> 1) & 0x09;
+        rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
+        rec.ExceptionCode = virtual_handle_fault( siginfo->si_addr, rec.ExceptionInformation[0],
+                                                  (void *)RSP_sig(ucontext) );
+        if (!rec.ExceptionCode) return;
         break;
     case TRAP_x86_ALIGNFLT:  /* Alignment check exception */
-        stack->rec.ExceptionCode = EXCEPTION_DATATYPE_MISALIGNMENT;
+        rec.ExceptionCode = EXCEPTION_DATATYPE_MISALIGNMENT;
         break;
     default:
         ERR( "Got unexpected trap %ld\n", (ULONG_PTR)TRAP_sig(ucontext) );
@@ -2207,11 +2155,10 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     case TRAP_x86_TSSFLT:    /* Invalid TSS exception */
     case TRAP_x86_MCHK:      /* Machine check exception */
     case TRAP_x86_CACHEFLT:  /* Cache flush exception */
-        stack->rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
+        rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
         break;
     }
-done:
-    setup_raise_exception( sigcontext, stack );
+    setup_raise_exception( sigcontext, &rec, &context );
 }
 
 
@@ -2222,34 +2169,38 @@ done:
  */
 static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
-    struct stack_layout *stack = setup_exception( sigcontext );
+    EXCEPTION_RECORD rec = { 0 };
+    CONTEXT context;
+    ucontext_t *ucontext = sigcontext;
+
+    rec.ExceptionAddress = (void *)RIP_sig(ucontext);
+    save_context( &context, sigcontext );
 
     switch (siginfo->si_code)
     {
     case TRAP_TRACE:  /* Single-step exception */
     case 4 /* TRAP_HWBKPT */: /* Hardware breakpoint exception */
-        stack->rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
+        rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
         break;
     case TRAP_BRKPT:   /* Breakpoint exception */
 #ifdef SI_KERNEL
     case SI_KERNEL:
 #endif
         /* Check if this is actually icebp instruction */
-        if (((unsigned char *)stack->rec.ExceptionAddress)[-1] == 0xF1)
+        if (((unsigned char *)RIP_sig(ucontext))[-1] == 0xF1)
         {
-            stack->rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
+            rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
             break;
         }
-        stack->rec.ExceptionAddress = (char *)stack->rec.ExceptionAddress - 1;  /* back up over the int3 instruction */
+        rec.ExceptionAddress = (char *)rec.ExceptionAddress - 1;  /* back up over the int3 instruction */
         /* fall through */
     default:
-        stack->rec.ExceptionCode = EXCEPTION_BREAKPOINT;
-        stack->rec.NumberParameters = 1;
-        stack->rec.ExceptionInformation[0] = 0;
+        rec.ExceptionCode = EXCEPTION_BREAKPOINT;
+        rec.NumberParameters = 1;
+        rec.ExceptionInformation[0] = 0;
         break;
     }
-
-    setup_raise_exception( sigcontext, stack );
+    setup_raise_exception( sigcontext, &rec, &context );
 }
 
 
@@ -2260,38 +2211,37 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
  */
 static void fpe_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
-    struct stack_layout *stack = setup_exception( sigcontext );
+    EXCEPTION_RECORD rec = { 0 };
 
     switch (siginfo->si_code)
     {
     case FPE_FLTSUB:
-        stack->rec.ExceptionCode = EXCEPTION_ARRAY_BOUNDS_EXCEEDED;
+        rec.ExceptionCode = EXCEPTION_ARRAY_BOUNDS_EXCEEDED;
         break;
     case FPE_INTDIV:
-        stack->rec.ExceptionCode = EXCEPTION_INT_DIVIDE_BY_ZERO;
+        rec.ExceptionCode = EXCEPTION_INT_DIVIDE_BY_ZERO;
         break;
     case FPE_INTOVF:
-        stack->rec.ExceptionCode = EXCEPTION_INT_OVERFLOW;
+        rec.ExceptionCode = EXCEPTION_INT_OVERFLOW;
         break;
     case FPE_FLTDIV:
-        stack->rec.ExceptionCode = EXCEPTION_FLT_DIVIDE_BY_ZERO;
+        rec.ExceptionCode = EXCEPTION_FLT_DIVIDE_BY_ZERO;
         break;
     case FPE_FLTOVF:
-        stack->rec.ExceptionCode = EXCEPTION_FLT_OVERFLOW;
+        rec.ExceptionCode = EXCEPTION_FLT_OVERFLOW;
         break;
     case FPE_FLTUND:
-        stack->rec.ExceptionCode = EXCEPTION_FLT_UNDERFLOW;
+        rec.ExceptionCode = EXCEPTION_FLT_UNDERFLOW;
         break;
     case FPE_FLTRES:
-        stack->rec.ExceptionCode = EXCEPTION_FLT_INEXACT_RESULT;
+        rec.ExceptionCode = EXCEPTION_FLT_INEXACT_RESULT;
         break;
     case FPE_FLTINV:
     default:
-        stack->rec.ExceptionCode = EXCEPTION_FLT_INVALID_OPERATION;
+        rec.ExceptionCode = EXCEPTION_FLT_INVALID_OPERATION;
         break;
     }
-
-    setup_raise_exception( sigcontext, stack );
+    setup_exception( sigcontext, &rec );
 }
 
 
@@ -2302,9 +2252,9 @@ static void fpe_handler( int signal, siginfo_t *siginfo, void *sigcontext )
  */
 static void int_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
-    struct stack_layout *stack = setup_exception( sigcontext );
-    stack->rec.ExceptionCode = CONTROL_C_EXIT;
-    setup_raise_exception( sigcontext, stack );
+    EXCEPTION_RECORD rec = { CONTROL_C_EXIT };
+
+    setup_exception( sigcontext, &rec );
 }
 
 
@@ -2315,10 +2265,9 @@ static void int_handler( int signal, siginfo_t *siginfo, void *sigcontext )
  */
 static void abrt_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
-    struct stack_layout *stack = setup_exception( sigcontext );
-    stack->rec.ExceptionCode = EXCEPTION_WINE_ASSERTION;
-    stack->rec.ExceptionFlags = EH_NONCONTINUABLE;
-    setup_raise_exception( sigcontext, stack );
+    EXCEPTION_RECORD rec = { EXCEPTION_WINE_ASSERTION, EH_NONCONTINUABLE };
+
+    setup_exception( sigcontext, &rec );
 }
 
 
@@ -2451,7 +2400,6 @@ static void *mac_thread_gsbase(void)
 void signal_init_thread( TEB *teb )
 {
     const WORD fpu_cw = 0x27f;
-    stack_t ss;
 
 #if defined __linux__
     arch_prctl( ARCH_SET_GS, teb );
@@ -2474,11 +2422,6 @@ void signal_init_thread( TEB *teb )
 #else
 # error Please define setting %gs for your architecture
 #endif
-
-    ss.ss_sp    = (char *)teb + teb_size;
-    ss.ss_size  = signal_stack_size;
-    ss.ss_flags = 0;
-    if (sigaltstack(&ss, NULL) == -1) perror( "sigaltstack" );
 
 #ifdef __GNUC__
     __asm__ volatile ("fninit; fldcw %0" : : "m" (fpu_cw));
@@ -2591,7 +2534,7 @@ __ASM_GLOBAL_FUNC( signal_start_thread,
                    __ASM_CFI(".cfi_rel_offset %r15,8\n\t")
                    /* store exit frame */
                    "movq %gs:0x30,%rax\n\t"
-                   "movq %rsp,0x330(%rax)\n\t"      /* amd64_thread_data()->exit_frame */
+                   "movq %rsp,0x320(%rax)\n\t"      /* amd64_thread_data()->exit_frame */
                    /* switch to thread stack */
                    "movq 8(%rax),%rax\n\t"          /* NtCurrentTeb()->Tib.StackBase */
                    "leaq -0x1000(%rax),%rsp\n\t"
@@ -2615,7 +2558,7 @@ __ASM_GLOBAL_FUNC( signal_start_thread,
 __ASM_GLOBAL_FUNC( signal_exit_thread,
                    /* fetch exit frame */
                    "movq %gs:0x30,%rax\n\t"
-                   "movq 0x330(%rax),%rdx\n\t"      /* amd64_thread_data()->exit_frame */
+                   "movq 0x320(%rax),%rdx\n\t"      /* amd64_thread_data()->exit_frame */
                    "testq %rdx,%rdx\n\t"
                    "jnz 1f\n\t"
                    "jmp *%rsi\n"

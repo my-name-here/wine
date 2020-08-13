@@ -69,6 +69,7 @@
 #include "winternl.h"
 #include "ddk/wdm.h"
 #include "wine/server.h"
+#include "wine/exception.h"
 #include "wine/debug.h"
 #include "unix_private.h"
 
@@ -905,6 +906,207 @@ NTSTATUS WINAPI NtAssignProcessToJobObject( HANDLE job, HANDLE process )
 
 
 /**************************************************************************
+ *           NtCreateDirectoryObject   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtCreateDirectoryObject( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr )
+{
+    NTSTATUS ret;
+    data_size_t len;
+    struct object_attributes *objattr;
+
+    if (!handle) return STATUS_ACCESS_VIOLATION;
+
+    if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
+
+    SERVER_START_REQ( create_directory )
+    {
+        req->access = access;
+        wine_server_add_data( req, objattr, len );
+        ret = wine_server_call( req );
+        *handle = wine_server_ptr_handle( reply->handle );
+    }
+    SERVER_END_REQ;
+    free( objattr );
+    return ret;
+}
+
+
+/**************************************************************************
+ *           NtOpenDirectoryObject   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtOpenDirectoryObject( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr )
+{
+    NTSTATUS ret;
+
+    if (!handle) return STATUS_ACCESS_VIOLATION;
+    if ((ret = validate_open_object_attributes( attr ))) return ret;
+
+    SERVER_START_REQ( open_directory )
+    {
+        req->access     = access;
+        req->attributes = attr->Attributes;
+        req->rootdir    = wine_server_obj_handle( attr->RootDirectory );
+        if (attr->ObjectName)
+            wine_server_add_data( req, attr->ObjectName->Buffer, attr->ObjectName->Length );
+        ret = wine_server_call( req );
+        *handle = wine_server_ptr_handle( reply->handle );
+    }
+    SERVER_END_REQ;
+    return ret;
+}
+
+
+/**************************************************************************
+ *           NtQueryDirectoryObject   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtQueryDirectoryObject( HANDLE handle, DIRECTORY_BASIC_INFORMATION *buffer,
+                                        ULONG size, BOOLEAN single_entry, BOOLEAN restart,
+                                        ULONG *context, ULONG *ret_size )
+{
+    NTSTATUS ret;
+
+    if (restart) *context = 0;
+
+    if (single_entry)
+    {
+        if (size <= sizeof(*buffer) + 2 * sizeof(WCHAR)) return STATUS_BUFFER_OVERFLOW;
+
+        SERVER_START_REQ( get_directory_entry )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            req->index = *context;
+            wine_server_set_reply( req, buffer + 1, size - sizeof(*buffer) - 2*sizeof(WCHAR) );
+            if (!(ret = wine_server_call( req )))
+            {
+                buffer->ObjectName.Buffer = (WCHAR *)(buffer + 1);
+                buffer->ObjectName.Length = reply->name_len;
+                buffer->ObjectName.MaximumLength = reply->name_len + sizeof(WCHAR);
+                buffer->ObjectTypeName.Buffer = (WCHAR *)(buffer + 1) + reply->name_len/sizeof(WCHAR) + 1;
+                buffer->ObjectTypeName.Length = wine_server_reply_size( reply ) - reply->name_len;
+                buffer->ObjectTypeName.MaximumLength = buffer->ObjectTypeName.Length + sizeof(WCHAR);
+                /* make room for the terminating null */
+                memmove( buffer->ObjectTypeName.Buffer, buffer->ObjectTypeName.Buffer - 1,
+                         buffer->ObjectTypeName.Length );
+                buffer->ObjectName.Buffer[buffer->ObjectName.Length/sizeof(WCHAR)] = 0;
+                buffer->ObjectTypeName.Buffer[buffer->ObjectTypeName.Length/sizeof(WCHAR)] = 0;
+                (*context)++;
+            }
+        }
+        SERVER_END_REQ;
+        if (ret_size)
+            *ret_size = buffer->ObjectName.MaximumLength + buffer->ObjectTypeName.MaximumLength + sizeof(*buffer);
+    }
+    else
+    {
+        FIXME("multiple entries not implemented\n");
+        ret = STATUS_NOT_IMPLEMENTED;
+    }
+    return ret;
+}
+
+
+/**************************************************************************
+ *           NtCreateSymbolicLinkObject   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtCreateSymbolicLinkObject( HANDLE *handle, ACCESS_MASK access,
+                                            OBJECT_ATTRIBUTES *attr, UNICODE_STRING *target )
+{
+    NTSTATUS ret;
+    data_size_t len;
+    struct object_attributes *objattr;
+
+    if (!handle || !attr || !target) return STATUS_ACCESS_VIOLATION;
+    if (!target->Buffer) return STATUS_INVALID_PARAMETER;
+
+    if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
+
+    SERVER_START_REQ( create_symlink )
+    {
+        req->access = access;
+        wine_server_add_data( req, objattr, len );
+        wine_server_add_data( req, target->Buffer, target->Length );
+        ret = wine_server_call( req );
+        *handle = wine_server_ptr_handle( reply->handle );
+    }
+    SERVER_END_REQ;
+    free( objattr );
+    return ret;
+}
+
+
+/**************************************************************************
+ *           NtOpenSymbolicLinkObject   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtOpenSymbolicLinkObject( HANDLE *handle, ACCESS_MASK access,
+                                          const OBJECT_ATTRIBUTES *attr )
+{
+    NTSTATUS ret;
+
+    if (!handle) return STATUS_ACCESS_VIOLATION;
+    if ((ret = validate_open_object_attributes( attr ))) return ret;
+
+    SERVER_START_REQ( open_symlink )
+    {
+        req->access     = access;
+        req->attributes = attr->Attributes;
+        req->rootdir    = wine_server_obj_handle( attr->RootDirectory );
+        if (attr->ObjectName)
+            wine_server_add_data( req, attr->ObjectName->Buffer, attr->ObjectName->Length );
+        ret = wine_server_call( req );
+        *handle = wine_server_ptr_handle( reply->handle );
+    }
+    SERVER_END_REQ;
+    return ret;
+}
+
+
+/**************************************************************************
+ *           NtQuerySymbolicLinkObject   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtQuerySymbolicLinkObject( HANDLE handle, UNICODE_STRING *target, ULONG *length )
+{
+    NTSTATUS ret;
+
+    if (!target) return STATUS_ACCESS_VIOLATION;
+
+    SERVER_START_REQ( query_symlink )
+    {
+        req->handle = wine_server_obj_handle( handle );
+        if (target->MaximumLength >= sizeof(WCHAR))
+            wine_server_set_reply( req, target->Buffer, target->MaximumLength - sizeof(WCHAR) );
+        if (!(ret = wine_server_call( req )))
+        {
+            target->Length = wine_server_reply_size(reply);
+            target->Buffer[target->Length / sizeof(WCHAR)] = 0;
+            if (length) *length = reply->total + sizeof(WCHAR);
+        }
+        else if (length && ret == STATUS_BUFFER_TOO_SMALL) *length = reply->total + sizeof(WCHAR);
+    }
+    SERVER_END_REQ;
+    return ret;
+}
+
+
+/**************************************************************************
+ *		NtMakeTemporaryObject (NTDLL.@)
+ */
+NTSTATUS WINAPI NtMakeTemporaryObject( HANDLE handle )
+{
+    NTSTATUS ret;
+
+    TRACE("%p\n", handle);
+
+    SERVER_START_REQ( make_temporary )
+    {
+        req->handle = wine_server_obj_handle( handle );
+        ret = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+    return ret;
+}
+
+
+/**************************************************************************
  *		NtCreateTimer (NTDLL.@)
  */
 NTSTATUS WINAPI NtCreateTimer( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
@@ -1160,8 +1362,16 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
  */
 NTSTATUS WINAPI NtQueryPerformanceCounter( LARGE_INTEGER *counter, LARGE_INTEGER *frequency )
 {
-    counter->QuadPart = monotonic_counter();
-    if (frequency) frequency->QuadPart = TICKSPERSEC;
+    __TRY
+    {
+        counter->QuadPart = monotonic_counter();
+        if (frequency) frequency->QuadPart = TICKSPERSEC;
+    }
+    __EXCEPT_PAGE_FAULT
+    {
+        return STATUS_ACCESS_VIOLATION;
+    }
+    __ENDTRY
     return STATUS_SUCCESS;
 }
 
@@ -1220,6 +1430,36 @@ NTSTATUS WINAPI NtSetSystemTime( const LARGE_INTEGER *new, LARGE_INTEGER *old )
     if (diff > -TICKSPERSEC / 2 && diff < TICKSPERSEC / 2) return STATUS_SUCCESS;
     ERR( "not allowed: difference %d ms\n", (int)(diff / 10000) );
     return STATUS_PRIVILEGE_NOT_HELD;
+}
+
+
+/***********************************************************************
+ *              NtQueryTimerResolution (NTDLL.@)
+ */
+NTSTATUS WINAPI NtQueryTimerResolution( ULONG *min_res, ULONG *max_res, ULONG *current_res )
+{
+    FIXME( "(%p,%p,%p), stub!\n", min_res, max_res, current_res );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *              NtSetTimerResolution (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSetTimerResolution( ULONG res, BOOLEAN set, ULONG *current_res )
+{
+    FIXME( "(%u,%u,%p), stub!\n", res, set, current_res );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/******************************************************************************
+ *              NtSetIntervalProfile (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSetIntervalProfile( ULONG interval, KPROFILE_SOURCE source )
+{
+    FIXME( "%u,%d\n", interval, source );
+    return STATUS_SUCCESS;
 }
 
 
@@ -1603,16 +1843,295 @@ NTSTATUS WINAPI NtOpenSection( HANDLE *handle, ACCESS_MASK access, const OBJECT_
 }
 
 
-static void *no_debug_info_marker = (void *)(ULONG_PTR)-1;
-
-static BOOL crit_section_has_debuginfo(const RTL_CRITICAL_SECTION *crit)
+/***********************************************************************
+ *             NtCreatePort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtCreatePort( HANDLE *handle, OBJECT_ATTRIBUTES *attr, ULONG info_len,
+                              ULONG data_len, ULONG *reserved )
 {
-    return crit->DebugInfo != NULL && crit->DebugInfo != no_debug_info_marker;
+    FIXME( "(%p,%p,%u,%u,%p),stub!\n", handle, attr, info_len, data_len, reserved );
+    return STATUS_NOT_IMPLEMENTED;
 }
+
+
+/***********************************************************************
+ *             NtConnectPort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtConnectPort( HANDLE *handle, UNICODE_STRING *name, SECURITY_QUALITY_OF_SERVICE *qos,
+                               LPC_SECTION_WRITE *write, LPC_SECTION_READ *read, ULONG *max_len,
+                               void *info, ULONG *info_len )
+{
+    FIXME( "(%p,%s,%p,%p,%p,%p,%p,%p),stub!\n", handle, debugstr_us(name), qos,
+           write, read, max_len, info, info_len );
+    if (info && info_len) TRACE("msg = %s\n", debugstr_an( info, *info_len ));
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtSecureConnectPort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtSecureConnectPort( HANDLE *handle, UNICODE_STRING *name, SECURITY_QUALITY_OF_SERVICE *qos,
+                                     LPC_SECTION_WRITE *write, PSID sid, LPC_SECTION_READ *read,
+                                     ULONG *max_len, void *info, ULONG *info_len )
+{
+    FIXME( "(%p,%s,%p,%p,%p,%p,%p,%p,%p),stub!\n", handle, debugstr_us(name), qos,
+           write, sid, read, max_len, info, info_len );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtListenPort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtListenPort( HANDLE handle, LPC_MESSAGE *msg )
+{
+    FIXME("(%p,%p),stub!\n", handle, msg );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtAcceptConnectPort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtAcceptConnectPort( HANDLE *handle, ULONG id, LPC_MESSAGE *msg, BOOLEAN accept,
+                                     LPC_SECTION_WRITE *write, LPC_SECTION_READ *read )
+{
+    FIXME("(%p,%u,%p,%d,%p,%p),stub!\n", handle, id, msg, accept, write, read );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtCompleteConnectPort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtCompleteConnectPort( HANDLE handle )
+{
+    FIXME( "(%p),stub!\n", handle );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtRegisterThreadTerminatePort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtRegisterThreadTerminatePort( HANDLE handle )
+{
+    FIXME( "(%p),stub!\n", handle );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtRequestWaitReplyPort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtRequestWaitReplyPort( HANDLE handle, LPC_MESSAGE *msg_in, LPC_MESSAGE *msg_out )
+{
+    FIXME( "(%p,%p,%p),stub!\n", handle, msg_in, msg_out );
+    if (msg_in)
+        TRACE("datasize %u msgsize %u type %u ranges %u client %p/%p msgid %lu size %lu data %s\n",
+              msg_in->DataSize, msg_in->MessageSize, msg_in->MessageType, msg_in->VirtualRangesOffset,
+              msg_in->ClientId.UniqueProcess, msg_in->ClientId.UniqueThread, msg_in->MessageId,
+              msg_in->SectionSize, debugstr_an( (const char *)msg_in->Data, msg_in->DataSize ));
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
+ *             NtReplyWaitReceivePort (NTDLL.@)
+ */
+NTSTATUS WINAPI NtReplyWaitReceivePort( HANDLE handle, ULONG *id, LPC_MESSAGE *reply, LPC_MESSAGE *msg )
+{
+    FIXME("(%p,%p,%p,%p),stub!\n", handle, id, reply, msg );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+#define MAX_ATOM_LEN  255
+#define IS_INTATOM(x) (((ULONG_PTR)(x) >> 16) == 0)
+
+static NTSTATUS is_integral_atom( const WCHAR *atomstr, ULONG len, RTL_ATOM *ret_atom )
+{
+    RTL_ATOM atom;
+
+    if ((ULONG_PTR)atomstr >> 16)
+    {
+        const WCHAR* ptr = atomstr;
+        if (!len) return STATUS_OBJECT_NAME_INVALID;
+
+        if (*ptr++ == '#')
+        {
+            atom = 0;
+            while (ptr < atomstr + len && *ptr >= '0' && *ptr <= '9')
+            {
+                atom = atom * 10 + *ptr++ - '0';
+            }
+            if (ptr > atomstr + 1 && ptr == atomstr + len) goto done;
+        }
+        if (len > MAX_ATOM_LEN) return STATUS_INVALID_PARAMETER;
+        return STATUS_MORE_ENTRIES;
+    }
+    else atom = LOWORD( atomstr );
+done:
+    if (!atom || atom >= MAXINTATOM) return STATUS_INVALID_PARAMETER;
+    *ret_atom = atom;
+    return STATUS_SUCCESS;
+}
+
+static ULONG integral_atom_name( WCHAR *buffer, ULONG len, RTL_ATOM atom )
+{
+    char tmp[16];
+    int ret = sprintf( tmp, "#%u", atom );
+
+    len /= sizeof(WCHAR);
+    if (len)
+    {
+        if (len <= ret) ret = len - 1;
+        ascii_to_unicode( buffer, tmp, ret );
+        buffer[ret] = 0;
+    }
+    return ret * sizeof(WCHAR);
+}
+
+
+/***********************************************************************
+ *             NtAddAtom (NTDLL.@)
+ */
+NTSTATUS WINAPI NtAddAtom( const WCHAR *name, ULONG length, RTL_ATOM *atom )
+{
+    NTSTATUS status = is_integral_atom( name, length / sizeof(WCHAR), atom );
+
+    if (status == STATUS_MORE_ENTRIES)
+    {
+        SERVER_START_REQ( add_atom )
+        {
+            wine_server_add_data( req, name, length );
+            req->table = 0;
+            status = wine_server_call( req );
+            *atom = reply->atom;
+        }
+        SERVER_END_REQ;
+    }
+    TRACE( "%s -> %x\n", debugstr_wn(name, length/sizeof(WCHAR)), status == STATUS_SUCCESS ? *atom : 0 );
+    return status;
+}
+
+
+/***********************************************************************
+ *             NtDeleteAtom (NTDLL.@)
+ */
+NTSTATUS WINAPI NtDeleteAtom( RTL_ATOM atom )
+{
+    NTSTATUS status;
+
+    SERVER_START_REQ( delete_atom )
+    {
+        req->atom = atom;
+        req->table = 0;
+        status = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+    return status;
+}
+
+
+/***********************************************************************
+ *             NtFindAtom (NTDLL.@)
+ */
+NTSTATUS WINAPI NtFindAtom( const WCHAR *name, ULONG length, RTL_ATOM *atom )
+{
+    NTSTATUS status = is_integral_atom( name, length / sizeof(WCHAR), atom );
+
+    if (status == STATUS_MORE_ENTRIES)
+    {
+        SERVER_START_REQ( find_atom )
+        {
+            wine_server_add_data( req, name, length );
+            req->table = 0;
+            status = wine_server_call( req );
+            *atom = reply->atom;
+        }
+        SERVER_END_REQ;
+    }
+    TRACE( "%s -> %x\n", debugstr_wn(name, length/sizeof(WCHAR)), status == STATUS_SUCCESS ? *atom : 0 );
+    return status;
+}
+
+
+/***********************************************************************
+ *             NtQueryInformationAtom (NTDLL.@)
+ */
+NTSTATUS WINAPI NtQueryInformationAtom( RTL_ATOM atom, ATOM_INFORMATION_CLASS class,
+                                        void *ptr, ULONG size, ULONG *retsize )
+{
+    NTSTATUS status;
+
+    switch (class)
+    {
+    case AtomBasicInformation:
+    {
+        ULONG name_len;
+        ATOM_BASIC_INFORMATION *abi = ptr;
+
+        if (size < sizeof(ATOM_BASIC_INFORMATION)) return STATUS_INVALID_PARAMETER;
+        name_len = size - sizeof(ATOM_BASIC_INFORMATION);
+
+        if (atom < MAXINTATOM)
+        {
+            if (atom)
+            {
+                abi->NameLength = integral_atom_name( abi->Name, name_len, atom );
+                status = name_len ? STATUS_SUCCESS : STATUS_BUFFER_TOO_SMALL;
+                abi->ReferenceCount = 1;
+                abi->Pinned = 1;
+            }
+            else status = STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            SERVER_START_REQ( get_atom_information )
+            {
+                req->atom = atom;
+                if (name_len) wine_server_set_reply( req, abi->Name, name_len );
+                status = wine_server_call( req );
+                if (status == STATUS_SUCCESS)
+                {
+                    name_len = wine_server_reply_size( reply );
+                    if (name_len)
+                    {
+                        abi->NameLength = name_len;
+                        abi->Name[name_len / sizeof(WCHAR)] = 0;
+                    }
+                    else
+                    {
+                        name_len = reply->total;
+                        abi->NameLength = name_len;
+                        status = STATUS_BUFFER_TOO_SMALL;
+                    }
+                    abi->ReferenceCount = reply->count;
+                    abi->Pinned = reply->pinned;
+                }
+                else name_len = 0;
+            }
+            SERVER_END_REQ;
+        }
+        TRACE( "%x -> %s (%u)\n", atom, debugstr_wn(abi->Name, abi->NameLength / sizeof(WCHAR)), status );
+        if (retsize) *retsize = sizeof(ATOM_BASIC_INFORMATION) + name_len;
+        break;
+    }
+
+    default:
+        FIXME( "Unsupported class %u\n", class );
+        status = STATUS_INVALID_INFO_CLASS;
+        break;
+    }
+    return status;
+}
+
 
 #ifdef __linux__
 
-static inline NTSTATUS fast_critsection_wait( RTL_CRITICAL_SECTION *crit, int timeout )
+NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
 {
     int val;
     struct timespec timespec;
@@ -1631,7 +2150,7 @@ static inline NTSTATUS fast_critsection_wait( RTL_CRITICAL_SECTION *crit, int ti
     return STATUS_WAIT_0;
 }
 
-static inline NTSTATUS fast_critsection_wake( RTL_CRITICAL_SECTION *crit )
+NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
     if (!use_futexes()) return STATUS_NOT_IMPLEMENTED;
 
@@ -1663,7 +2182,7 @@ static inline semaphore_t get_mach_semaphore( RTL_CRITICAL_SECTION *crit )
     return ret;
 }
 
-static inline NTSTATUS fast_critsection_wait( RTL_CRITICAL_SECTION *crit, int timeout )
+NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
 {
     mach_timespec_t timespec;
     semaphore_t sem = get_mach_semaphore( crit );
@@ -1686,7 +2205,7 @@ static inline NTSTATUS fast_critsection_wait( RTL_CRITICAL_SECTION *crit, int ti
     }
 }
 
-static inline NTSTATUS fast_critsection_wake( RTL_CRITICAL_SECTION *crit )
+NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
     semaphore_t sem = get_mach_semaphore( crit );
     semaphore_signal( sem );
@@ -1701,12 +2220,12 @@ NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
 
 #else  /* __APPLE__ */
 
-static inline NTSTATUS fast_critsection_wait( RTL_CRITICAL_SECTION *crit, int timeout )
+NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
 {
     return STATUS_NOT_IMPLEMENTED;
 }
 
-static inline NTSTATUS fast_critsection_wake( RTL_CRITICAL_SECTION *crit )
+NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
     return STATUS_NOT_IMPLEMENTED;
 }
@@ -1717,56 +2236,6 @@ NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
 }
 
 #endif
-
-static inline HANDLE get_critsection_semaphore( RTL_CRITICAL_SECTION *crit )
-{
-    HANDLE ret = crit->LockSemaphore;
-    if (!ret)
-    {
-        HANDLE sem;
-        if (NtCreateSemaphore( &sem, SEMAPHORE_ALL_ACCESS, NULL, 0, 1 )) return 0;
-        if (!(ret = InterlockedCompareExchangePointer( &crit->LockSemaphore, sem, 0 )))
-            ret = sem;
-        else
-            NtClose( sem );  /* somebody beat us to it */
-    }
-    return ret;
-}
-
-NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
-{
-    NTSTATUS ret;
-
-    /* debug info is cleared by MakeCriticalSectionGlobal */
-    if (!crit_section_has_debuginfo( crit ) ||
-        ((ret = fast_critsection_wait( crit, timeout )) == STATUS_NOT_IMPLEMENTED))
-    {
-        HANDLE sem = get_critsection_semaphore( crit );
-        LARGE_INTEGER time;
-        select_op_t select_op;
-
-        time.QuadPart = timeout * (LONGLONG)-10000000;
-        select_op.wait.op = SELECT_WAIT;
-        select_op.wait.handles[0] = wine_server_obj_handle( sem );
-        ret = server_wait( &select_op, offsetof( select_op_t, wait.handles[1] ), 0, &time );
-    }
-    return ret;
-}
-
-NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
-{
-    NTSTATUS ret;
-
-    /* debug info is cleared by MakeCriticalSectionGlobal */
-    if (!crit_section_has_debuginfo( crit ) ||
-        ((ret = fast_critsection_wake( crit )) == STATUS_NOT_IMPLEMENTED))
-    {
-        HANDLE sem = get_critsection_semaphore( crit );
-        ret = NtReleaseSemaphore( sem, 1, NULL );
-    }
-    return ret;
-}
-
 
 
 #ifdef __linux__
@@ -2053,9 +2522,20 @@ NTSTATUS CDECL fast_RtlSleepConditionVariableCS( RTL_CONDITION_VARIABLE *variabl
 
     val = *futex;
 
-    RtlLeaveCriticalSection( cs );
-    status = wait_cv( futex, val, timeout );
-    RtlEnterCriticalSection( cs );
+    if (cs->RecursionCount == 1)
+    {
+        /* FIXME: simplified version of RtlLeaveCriticalSection/RtlEnterCriticalSection to avoid imports */
+        cs->RecursionCount = 0;
+        cs->OwningThread   = 0;
+        if (InterlockedDecrement( &cs->LockCount ) >= 0) fast_RtlpUnWaitCriticalSection( cs );
+
+        status = wait_cv( futex, val, timeout );
+
+        if (InterlockedIncrement( &cs->LockCount )) fast_RtlpWaitForCriticalSection( cs, INT_MAX );
+        cs->OwningThread   = ULongToHandle( GetCurrentThreadId() );
+        cs->RecursionCount = 1;
+    }
+    else status = wait_cv( futex, val, timeout );
     return status;
 }
 

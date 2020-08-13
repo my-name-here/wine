@@ -187,7 +187,7 @@
 @ cdecl _o__atoi_l(str ptr) ucrtbase._o__atoi_l
 @ cdecl _o__atol_l(str ptr) ucrtbase._o__atol_l
 @ cdecl _o__atoldbl(ptr str) ucrtbase._o__atoldbl
-@ stub _o__atoldbl_l
+@ cdecl _o__atoldbl_l(ptr str ptr) ucrtbase._o__atoldbl_l
 @ cdecl -ret64 _o__atoll_l(str ptr) ucrtbase._o__atoll_l
 @ cdecl _o__beep(long long) ucrtbase._o__beep
 @ cdecl _o__beginthread(ptr long ptr) ucrtbase._o__beginthread
@@ -384,7 +384,7 @@
 @ stub _o__ismbbkalnum
 @ stub _o__ismbbkalnum_l
 @ cdecl _o__ismbbkana(long) ucrtbase._o__ismbbkana
-@ stub _o__ismbbkana_l
+@ cdecl _o__ismbbkana_l(long ptr) ucrtbase._o__ismbbkana_l
 @ stub _o__ismbbkprint
 @ stub _o__ismbbkprint_l
 @ stub _o__ismbbkpunct
@@ -398,15 +398,15 @@
 @ cdecl _o__ismbbtrail(long) ucrtbase._o__ismbbtrail
 @ cdecl _o__ismbbtrail_l(long ptr) ucrtbase._o__ismbbtrail_l
 @ cdecl _o__ismbcalnum(long) ucrtbase._o__ismbcalnum
-@ stub _o__ismbcalnum_l
+@ cdecl _o__ismbcalnum_l(long ptr) ucrtbase._o__ismbcalnum_l
 @ cdecl _o__ismbcalpha(long) ucrtbase._o__ismbcalpha
-@ stub _o__ismbcalpha_l
+@ cdecl _o__ismbcalpha_l(long ptr) ucrtbase._o__ismbcalpha_l
 @ stub _o__ismbcblank
 @ stub _o__ismbcblank_l
 @ cdecl _o__ismbcdigit(long) ucrtbase._o__ismbcdigit
-@ stub _o__ismbcdigit_l
+@ cdecl _o__ismbcdigit_l(long ptr) ucrtbase._o__ismbcdigit_l
 @ cdecl _o__ismbcgraph(long) ucrtbase._o__ismbcgraph
-@ stub _o__ismbcgraph_l
+@ cdecl _o__ismbcgraph_l(long ptr) ucrtbase._o__ismbcgraph_l
 @ cdecl _o__ismbchira(long) ucrtbase._o__ismbchira
 @ stub _o__ismbchira_l
 @ cdecl _o__ismbckata(long) ucrtbase._o__ismbckata
@@ -420,17 +420,17 @@
 @ cdecl _o__ismbclegal(long) ucrtbase._o__ismbclegal
 @ cdecl _o__ismbclegal_l(long ptr) ucrtbase._o__ismbclegal_l
 @ stub _o__ismbclower
-@ stub _o__ismbclower_l
+@ cdecl _o__ismbclower_l(long ptr) ucrtbase._o__ismbclower_l
 @ cdecl _o__ismbcprint(long) ucrtbase._o__ismbcprint
-@ stub _o__ismbcprint_l
+@ cdecl _o__ismbcprint_l(long ptr) ucrtbase._o__ismbcprint_l
 @ cdecl _o__ismbcpunct(long) ucrtbase._o__ismbcpunct
-@ stub _o__ismbcpunct_l
+@ cdecl _o__ismbcpunct_l(long ptr) ucrtbase._o__ismbcpunct_l
 @ cdecl _o__ismbcspace(long) ucrtbase._o__ismbcspace
-@ stub _o__ismbcspace_l
+@ cdecl _o__ismbcspace_l(long ptr) ucrtbase._o__ismbcspace_l
 @ cdecl _o__ismbcsymbol(long) ucrtbase._o__ismbcsymbol
 @ stub _o__ismbcsymbol_l
 @ cdecl _o__ismbcupper(long) ucrtbase._o__ismbcupper
-@ stub _o__ismbcupper_l
+@ cdecl _o__ismbcupper_l(long ptr) ucrtbase._o__ismbcupper_l
 @ cdecl _o__ismbslead(ptr ptr) ucrtbase._o__ismbslead
 @ stub _o__ismbslead_l
 @ cdecl _o__ismbstrail(ptr ptr) ucrtbase._o__ismbstrail

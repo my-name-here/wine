@@ -28,7 +28,6 @@
 #include "msvcrt.h"
 #include "winnls.h"
 #include "wtypes.h"
-#include "wine/unicode.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
@@ -79,7 +78,7 @@ MSVCRT_wchar_t* CDECL MSVCRT__wcsdup( const MSVCRT_wchar_t* str )
   MSVCRT_wchar_t* ret = NULL;
   if (str)
   {
-    int size = (strlenW(str) + 1) * sizeof(MSVCRT_wchar_t);
+    int size = (MSVCRT_wcslen(str) + 1) * sizeof(MSVCRT_wchar_t);
     ret = MSVCRT_malloc( size );
     if (ret) memcpy( ret, str, size );
   }
@@ -92,6 +91,7 @@ MSVCRT_wchar_t* CDECL MSVCRT__wcsdup( const MSVCRT_wchar_t* str )
 int CDECL MSVCRT__towlower_l(MSVCRT_wint_t c, MSVCRT__locale_t locale)
 {
     MSVCRT_pthreadlocinfo locinfo;
+    MSVCRT_wchar_t ret;
 
     if(!locale)
         locinfo = get_locinfo();
@@ -104,7 +104,9 @@ int CDECL MSVCRT__towlower_l(MSVCRT_wint_t c, MSVCRT__locale_t locale)
         return c;
     }
 
-    return tolowerW(c);
+    if(!LCMapStringW(locinfo->lc_handle[MSVCRT_LC_CTYPE], LCMAP_LOWERCASE, &c, 1, &ret, 1))
+        return c;
+    return ret;
 }
 
 /*********************************************************************
@@ -295,7 +297,7 @@ int CDECL MSVCRT__wcsnset_s( MSVCRT_wchar_t *str, MSVCRT_size_t size, MSVCRT_wch
 MSVCRT_wchar_t* CDECL MSVCRT__wcsrev( MSVCRT_wchar_t* str )
 {
   MSVCRT_wchar_t* ret = str;
-  MSVCRT_wchar_t* end = str + strlenW(str) - 1;
+  MSVCRT_wchar_t* end = str + MSVCRT_wcslen(str) - 1;
   while (end > str)
   {
     MSVCRT_wchar_t t = *end;
@@ -353,8 +355,7 @@ int CDECL MSVCRT__wcsupr_s_l( MSVCRT_wchar_t* str, MSVCRT_size_t n,
   while (n--)
   {
     if (!*ptr) return 0;
-    /* FIXME: add locale support */
-    *ptr = toupperW(*ptr);
+    *ptr = MSVCRT__towupper_l(*ptr, locale);
     ptr++;
   }
 
@@ -408,7 +409,7 @@ int CDECL MSVCRT__wcslwr_s_l( MSVCRT_wchar_t* str, MSVCRT_size_t n, MSVCRT__loca
   while (n--)
   {
     if (!*ptr) return 0;
-    *ptr = tolowerW(*ptr);
+    *ptr = MSVCRT__towlower_l(*ptr, locale);
     ptr++;
   }
 
@@ -509,7 +510,9 @@ double CDECL MSVCRT__wcstod_l(const MSVCRT_wchar_t* str, MSVCRT_wchar_t** end,
 {
     MSVCRT_pthreadlocinfo locinfo;
     const MSVCRT_wchar_t *beg, *p;
+    struct fpnum fp;
     double ret;
+    int err;
 
     if (!MSVCRT_CHECK_PMT(str != NULL)) {
         if (end) *end = NULL;
@@ -526,8 +529,11 @@ double CDECL MSVCRT__wcstod_l(const MSVCRT_wchar_t* str, MSVCRT_wchar_t** end,
         p++;
     beg = p;
 
-    ret = parse_double(strtod_wstr_get, strtod_wstr_unget, &p, locinfo, NULL);
+    fp = fpnum_parse(strtod_wstr_get, strtod_wstr_unget, &p, locinfo, FALSE);
     if (end) *end = (p == beg ? (MSVCRT_wchar_t*)str : (MSVCRT_wchar_t*)p);
+
+    err = fpnum_double(&fp, &ret);
+    if(err) *MSVCRT__errno() = err;
     return ret;
 }
 
@@ -550,7 +556,7 @@ static MSVCRT_size_t MSVCRT_wcsrtombs_l(char *mbstr, const MSVCRT_wchar_t **wcst
         MSVCRT_size_t i;
 
         if(!mbstr)
-            return strlenW(*wcstr);
+            return MSVCRT_wcslen(*wcstr);
 
         for(i=0; i<count; i++) {
             if((*wcstr)[i] > 255) {
@@ -1753,10 +1759,10 @@ MSVCRT_wchar_t * CDECL MSVCRT_wcstok_s( MSVCRT_wchar_t *str, const MSVCRT_wchar_
 
     if (!str) str = *next_token;
 
-    while (*str && strchrW( delim, *str )) str++;
+    while (*str && MSVCRT_wcschr( delim, *str )) str++;
     if (!*str) return NULL;
     ret = str++;
-    while (*str && !strchrW( delim, *str )) str++;
+    while (*str && !MSVCRT_wcschr( delim, *str )) str++;
     if (*str) *str++ = 0;
     *next_token = str;
     return ret;
@@ -1913,187 +1919,21 @@ MSVCRT_size_t CDECL MSVCRT_wcrtomb( char *dst, MSVCRT_wchar_t ch, MSVCRT_mbstate
 }
 
 /*********************************************************************
- *		iswalnum (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswalnum( MSVCRT_wchar_t wc )
-{
-    return isalnumW( wc );
-}
-
-/*********************************************************************
- *		_iswalnum_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswalnum_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isalnumW( wc );
-}
-
-/*********************************************************************
- *		iswalpha (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswalpha( MSVCRT_wchar_t wc )
-{
-    return isalphaW( wc );
-}
-
-/*********************************************************************
- *              iswalpha_l (MSVCRT.@)
- */
-INT CDECL MSVCRT__iswalpha_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isalphaW( wc );
-}
-
-/*********************************************************************
- *		iswcntrl (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswcntrl( MSVCRT_wchar_t wc )
-{
-    return iscntrlW( wc );
-}
-
-/*********************************************************************
- *		_iswcntrl_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswcntrl_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return iscntrlW( wc );
-}
-
-/*********************************************************************
- *		iswdigit (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswdigit( MSVCRT_wchar_t wc )
-{
-    return isdigitW( wc );
-}
-
-/*********************************************************************
- *		_iswdigit_l (MSVCRT.@)
- */
-INT CDECL MSVCRT__iswdigit_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isdigitW( wc );
-}
-
-/*********************************************************************
- *		iswgraph (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswgraph( MSVCRT_wchar_t wc )
-{
-    return isgraphW( wc );
-}
-
-/*********************************************************************
- *		_iswgraph_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswgraph_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isgraphW( wc );
-}
-
-/*********************************************************************
- *		iswlower (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswlower( MSVCRT_wchar_t wc )
-{
-    return islowerW( wc );
-}
-
-/*********************************************************************
- *		_iswlower_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswlower_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return islowerW( wc );
-}
-
-/*********************************************************************
- *		iswprint (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswprint( MSVCRT_wchar_t wc )
-{
-    return isprintW( wc );
-}
-
-/*********************************************************************
- *		_iswprint_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswprint_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isprintW( wc );
-}
-
-/*********************************************************************
- *		_iswpunct_l (MSVCRT.@)
- */
-INT CDECL MSVCRT__iswpunct_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return ispunctW( wc );
-}
-
-/*********************************************************************
- *		iswpunct (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswpunct( MSVCRT_wchar_t wc )
-{
-    return ispunctW( wc );
-}
-
-/*********************************************************************
- *		_iswspace_l (MSVCRT.@)
- */
-INT CDECL MSVCRT__iswspace_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isspaceW( wc );
-}
-
-/*********************************************************************
- *		iswspace (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswspace( MSVCRT_wchar_t wc )
-{
-    return isspaceW( wc );
-}
-
-/*********************************************************************
- *		iswupper (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswupper( MSVCRT_wchar_t wc )
-{
-    return isupperW( wc );
-}
-
-/*********************************************************************
- *		_iswupper_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswupper_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isupperW( wc );
-}
-
-/*********************************************************************
- *		iswxdigit (MSVCRT.@)
- */
-INT CDECL MSVCRT_iswxdigit( MSVCRT_wchar_t wc )
-{
-    return isxdigitW( wc );
-}
-
-/*********************************************************************
- *		_iswxdigit_l (MSVCRT.@)
- */
-int CDECL MSVCRT__iswxdigit_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
-{
-    return isxdigitW( wc );
-}
-
-/*********************************************************************
  *		_iswctype_l (MSVCRT.@)
  */
 INT CDECL MSVCRT__iswctype_l( MSVCRT_wchar_t wc, MSVCRT_wctype_t type, MSVCRT__locale_t locale )
 {
-    return (get_char_typeW(wc) & 0xffff) & type;
+    WORD ct;
+
+    if (wc == MSVCRT_WEOF) return 0;
+    if (wc < 256) return MSVCRT__pwctype[wc] & type;
+
+    if (!GetStringTypeW(CT_CTYPE1, &wc, 1, &ct))
+    {
+        ERR("GetStringTypeW failed for %x\n", wc);
+        return 0;
+    }
+    return ct & type;
 }
 
 /*********************************************************************
@@ -2101,7 +1941,184 @@ INT CDECL MSVCRT__iswctype_l( MSVCRT_wchar_t wc, MSVCRT_wctype_t type, MSVCRT__l
  */
 INT CDECL MSVCRT_iswctype( MSVCRT_wchar_t wc, MSVCRT_wctype_t type )
 {
-    return (get_char_typeW(wc) & 0xfff) & type;
+    return MSVCRT__iswctype_l( wc, type, NULL );
+}
+
+/*********************************************************************
+ *		_iswalnum_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswalnum_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__ALPHA | MSVCRT__DIGIT, locale );
+}
+
+/*********************************************************************
+ *		iswalnum (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswalnum( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswalnum_l( wc, NULL );
+}
+
+/*********************************************************************
+ *              iswalpha_l (MSVCRT.@)
+ */
+INT CDECL MSVCRT__iswalpha_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__ALPHA, locale );
+}
+
+/*********************************************************************
+ *		iswalpha (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswalpha( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswalpha_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswcntrl_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswcntrl_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__CONTROL, locale );
+}
+
+/*********************************************************************
+ *		iswcntrl (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswcntrl( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswcntrl_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswdigit_l (MSVCRT.@)
+ */
+INT CDECL MSVCRT__iswdigit_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__DIGIT, locale );
+}
+
+/*********************************************************************
+ *		iswdigit (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswdigit( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswdigit_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswgraph_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswgraph_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__ALPHA | MSVCRT__DIGIT | MSVCRT__PUNCT, locale );
+}
+
+/*********************************************************************
+ *		iswgraph (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswgraph( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswgraph_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswlower_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswlower_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__LOWER, locale );
+}
+
+/*********************************************************************
+ *		iswlower (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswlower( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswlower_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswprint_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswprint_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__ALPHA | MSVCRT__BLANK |
+            MSVCRT__DIGIT | MSVCRT__PUNCT, locale );
+}
+
+/*********************************************************************
+ *		iswprint (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswprint( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswprint_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswpunct_l (MSVCRT.@)
+ */
+INT CDECL MSVCRT__iswpunct_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__PUNCT, locale );
+}
+
+/*********************************************************************
+ *		iswpunct (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswpunct( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswpunct_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswspace_l (MSVCRT.@)
+ */
+INT CDECL MSVCRT__iswspace_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__SPACE, locale );
+}
+
+/*********************************************************************
+ *		iswspace (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswspace( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswspace_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswupper_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswupper_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__UPPER, locale );
+}
+
+/*********************************************************************
+ *		iswupper (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswupper( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswupper_l( wc, NULL );
+}
+
+/*********************************************************************
+ *		_iswxdigit_l (MSVCRT.@)
+ */
+int CDECL MSVCRT__iswxdigit_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return MSVCRT__iswctype_l( wc, MSVCRT__HEX, locale );
+}
+
+/*********************************************************************
+ *		iswxdigit (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswxdigit( MSVCRT_wchar_t wc )
+{
+    return MSVCRT__iswxdigit_l( wc, NULL );
 }
 
 /*********************************************************************
@@ -2136,7 +2153,7 @@ INT CDECL MSVCRT_wcscpy_s( MSVCRT_wchar_t* wcDest, MSVCRT_size_t numElement, con
         return MSVCRT_EINVAL;
     }
 
-    size = strlenW(wcSrc) + 1;
+    size = MSVCRT_wcslen(wcSrc) + 1;
 
     if(!MSVCRT_CHECK_PMT_ERR(size <= numElement, MSVCRT_ERANGE))
     {
@@ -2147,6 +2164,16 @@ INT CDECL MSVCRT_wcscpy_s( MSVCRT_wchar_t* wcDest, MSVCRT_size_t numElement, con
     memmove( wcDest, wcSrc, size*sizeof(WCHAR) );
 
     return 0;
+}
+
+/***********************************************************************
+ *             wcscpy (MSVCRT.@)
+ */
+MSVCRT_wchar_t* __cdecl MSVCRT_wcscpy( MSVCRT_wchar_t *dst, const MSVCRT_wchar_t *src )
+{
+    WCHAR *p = dst;
+    while ((*p++ = *src++));
+    return dst;
 }
 
 /******************************************************************
@@ -2232,6 +2259,15 @@ INT CDECL MSVCRT_wcscat_s(MSVCRT_wchar_t* dst, MSVCRT_size_t elem, const MSVCRT_
     return MSVCRT_ERANGE;
 }
 
+/***********************************************************************
+ *           wcscat (MSVCRT.@)
+ */
+MSVCRT_wchar_t* __cdecl MSVCRT_wcscat( MSVCRT_wchar_t *dst, const MSVCRT_wchar_t *src )
+{
+    MSVCRT_wcscpy( dst + MSVCRT_wcslen(dst), src );
+    return dst;
+}
+
 /*********************************************************************
  *  wcsncat_s (MSVCRT.@)
  *
@@ -2263,7 +2299,7 @@ INT CDECL MSVCRT_wcsncat_s(MSVCRT_wchar_t *dst, MSVCRT_size_t elem,
 
     if (count == MSVCRT__TRUNCATE)
     {
-        srclen = strlenW(src);
+        srclen = MSVCRT_wcslen(src);
         if (srclen >= (elem - dststart))
         {
             srclen = elem - dststart - 1;
@@ -2271,7 +2307,7 @@ INT CDECL MSVCRT_wcsncat_s(MSVCRT_wchar_t *dst, MSVCRT_size_t elem,
         }
     }
     else
-        srclen = min(strlenW(src), count);
+        srclen = min(MSVCRT_wcslen(src), count);
     if (srclen < (elem - dststart))
     {
         memcpy(&dst[dststart], src, srclen*sizeof(MSVCRT_wchar_t));
@@ -2333,7 +2369,7 @@ __int64 CDECL MSVCRT__wcstoi64_l(const MSVCRT_wchar_t *nptr,
     if(endptr)
         *endptr = (MSVCRT_wchar_t*)nptr;
 
-    while(isspaceW(*nptr)) nptr++;
+    while(MSVCRT__iswspace_l(*nptr, locale)) nptr++;
 
     if(*nptr == '-') {
         negative = TRUE;
@@ -2341,7 +2377,7 @@ __int64 CDECL MSVCRT__wcstoi64_l(const MSVCRT_wchar_t *nptr,
     } else if(*nptr == '+')
         nptr++;
 
-    if((base==0 || base==16) && wctoint(*nptr, 1)==0 && tolowerW(*(nptr+1))=='x') {
+    if((base==0 || base==16) && wctoint(*nptr, 1)==0 && (nptr[1]=='x' || nptr[1]=='X')) {
         base = 16;
         nptr += 2;
     }
@@ -2506,7 +2542,7 @@ unsigned __int64 CDECL MSVCRT__wcstoui64_l(const MSVCRT_wchar_t *nptr,
     if(endptr)
         *endptr = (MSVCRT_wchar_t*)nptr;
 
-    while(isspaceW(*nptr)) nptr++;
+    while(MSVCRT__iswspace_l(*nptr, locale)) nptr++;
 
     if(*nptr == '-') {
         negative = TRUE;
@@ -2514,7 +2550,7 @@ unsigned __int64 CDECL MSVCRT__wcstoui64_l(const MSVCRT_wchar_t *nptr,
     } else if(*nptr == '+')
         nptr++;
 
-    if((base==0 || base==16) && wctoint(*nptr, 1)==0 && tolowerW(*(nptr+1))=='x') {
+    if((base==0 || base==16) && wctoint(*nptr, 1)==0 && (nptr[1]=='x' || nptr[1]=='X')) {
         base = 16;
         nptr += 2;
     }
@@ -2600,6 +2636,7 @@ MSVCRT_size_t CDECL MSVCRT_wcsnlen(const MSVCRT_wchar_t *s, MSVCRT_size_t maxlen
 int CDECL MSVCRT__towupper_l(MSVCRT_wint_t c, MSVCRT__locale_t locale)
 {
     MSVCRT_pthreadlocinfo locinfo;
+    MSVCRT_wchar_t ret;
 
     if(!locale)
         locinfo = get_locinfo();
@@ -2612,7 +2649,9 @@ int CDECL MSVCRT__towupper_l(MSVCRT_wint_t c, MSVCRT__locale_t locale)
         return c;
     }
 
-    return toupperW(c);
+    if(!LCMapStringW(locinfo->lc_handle[MSVCRT_LC_CTYPE], LCMAP_UPPERCASE, &c, 1, &ret, 1))
+        return c;
+    return ret;
 }
 
 /*********************************************************************
@@ -2628,7 +2667,8 @@ int CDECL MSVCRT_towupper(MSVCRT_wint_t c)
  */
 MSVCRT_wchar_t* CDECL MSVCRT_wcschr(const MSVCRT_wchar_t *str, MSVCRT_wchar_t ch)
 {
-    return strchrW(str, ch);
+    do { if (*str == ch) return (WCHAR *)(ULONG_PTR)str; } while (*str++);
+    return NULL;
 }
 
 /*********************************************************************
@@ -2636,15 +2676,19 @@ MSVCRT_wchar_t* CDECL MSVCRT_wcschr(const MSVCRT_wchar_t *str, MSVCRT_wchar_t ch
  */
 MSVCRT_wchar_t* CDECL MSVCRT_wcsrchr(const MSVCRT_wchar_t *str, MSVCRT_wchar_t ch)
 {
-    return strrchrW(str, ch);
+    WCHAR *ret = NULL;
+    do { if (*str == ch) ret = (WCHAR *)(ULONG_PTR)str; } while (*str++);
+    return ret;
 }
 
 /***********************************************************************
  *              wcslen (MSVCRT.@)
  */
-int CDECL MSVCRT_wcslen(const MSVCRT_wchar_t *str)
+MSVCRT_size_t CDECL MSVCRT_wcslen(const MSVCRT_wchar_t *str)
 {
-    return strlenW(str);
+    const MSVCRT_wchar_t *s = str;
+    while (*s) s++;
+    return s - str;
 }
 
 /*********************************************************************
@@ -2652,7 +2696,19 @@ int CDECL MSVCRT_wcslen(const MSVCRT_wchar_t *str)
  */
 MSVCRT_wchar_t* CDECL MSVCRT_wcsstr(const MSVCRT_wchar_t *str, const MSVCRT_wchar_t *sub)
 {
-    return strstrW(str, sub);
+    while(*str)
+    {
+        const MSVCRT_wchar_t *p1 = str, *p2 = sub;
+        while(*p1 && *p2 && *p1 == *p2)
+        {
+            p1++;
+            p2++;
+        }
+        if(!*p2)
+            return (MSVCRT_wchar_t*)str;
+        str++;
+    }
+    return NULL;
 }
 
 /*********************************************************************
@@ -2663,7 +2719,7 @@ __int64 CDECL MSVCRT__wtoi64_l(const MSVCRT_wchar_t *str, MSVCRT__locale_t local
     ULONGLONG RunningTotal = 0;
     BOOL bMinus = FALSE;
 
-    while (isspaceW(*str)) {
+    while (MSVCRT__iswspace_l(*str, locale)) {
         str++;
     } /* while */
 
@@ -2714,7 +2770,7 @@ MSVCRT_size_t CDECL MSVCRT__wcsxfrm_l(MSVCRT_wchar_t *dest, const MSVCRT_wchar_t
 
     if(!locinfo->lc_handle[MSVCRT_LC_COLLATE]) {
         MSVCRT_wcsncpy(dest, src, len);
-        return strlenW(src);
+        return MSVCRT_wcslen(src);
     }
 
     ret = LCMapStringW(locinfo->lc_handle[MSVCRT_LC_COLLATE],

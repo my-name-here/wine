@@ -797,6 +797,9 @@ static HANDLE send_frame_time(IMemInputPin *sink, REFERENCE_TIME start_time, uns
     hr = IMediaSample_SetTime(sample, &start_time, &end_time);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
+    hr = IMediaSample_SetPreroll(sample, TRUE);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
     params->sink = sink;
     params->sample = sample;
     thread = CreateThread(NULL, 0, frame_thread, params, 0, NULL);
@@ -1172,7 +1175,7 @@ static void test_eos(IPin *pin, IMemInputPin *input, IFilterGraph2 *graph)
      * done rendering. */
 
     hr = IMediaControl_Run(control);
-    todo_wine ok(hr == S_FALSE, "Got hr %#x.\n", hr);
+    ok(hr == S_FALSE, "Got hr %#x.\n", hr);
     hr = join_thread(send_frame(input));
     ok(hr == S_OK, "Got hr %#x.\n", hr);
     hr = IMediaControl_GetState(control, 1000, &state);
@@ -1195,7 +1198,7 @@ static void test_eos(IPin *pin, IMemInputPin *input, IFilterGraph2 *graph)
     /* Test sending EOS while flushing. */
 
     hr = IMediaControl_Run(control);
-    todo_wine ok(hr == S_FALSE, "Got hr %#x.\n", hr);
+    ok(hr == S_FALSE, "Got hr %#x.\n", hr);
     hr = join_thread(send_frame(input));
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
@@ -1214,7 +1217,7 @@ static void test_eos(IPin *pin, IMemInputPin *input, IFilterGraph2 *graph)
     /* Test sending EOS and then flushing or stopping. */
 
     hr = IMediaControl_Run(control);
-    todo_wine ok(hr == S_FALSE, "Got hr %#x.\n", hr);
+    ok(hr == S_FALSE, "Got hr %#x.\n", hr);
     hr = join_thread(send_frame(input));
     ok(hr == S_OK, "Got hr %#x.\n", hr);
     hr = IMediaControl_GetState(control, 1000, &state);
@@ -2699,7 +2702,7 @@ static void test_basic_video(void)
     reftime = 0.0;
     hr = IBasicVideo_get_AvgTimePerFrame(video, &reftime);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
-    todo_wine ok(reftime == 0.02, "Got frame rate %.16e.\n", reftime);
+    ok(reftime == 0.02, "Got frame rate %.16e.\n", reftime);
 
     l = 0xdeadbeef;
     hr = IBasicVideo_get_BitRate(video, &l);
@@ -2730,6 +2733,7 @@ static void test_basic_video(void)
 
     vih.bmiHeader.biWidth = 16;
     vih.bmiHeader.biHeight = 16;
+    vih.bmiHeader.biSizeImage = 0;
     hr = IFilterGraph2_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &req_mt);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
