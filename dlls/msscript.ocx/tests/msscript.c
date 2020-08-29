@@ -93,10 +93,23 @@ DEFINE_EXPECT(CreateInstance);
 DEFINE_EXPECT(SetInterfaceSafetyOptions);
 DEFINE_EXPECT(InitNew);
 DEFINE_EXPECT(Close);
+DEFINE_EXPECT(Bind);
+DEFINE_EXPECT(QI_ITypeComp);
+DEFINE_EXPECT(GetTypeAttr);
+DEFINE_EXPECT(GetNames);
+DEFINE_EXPECT(GetFuncDesc);
+DEFINE_EXPECT(ReleaseTypeAttr);
+DEFINE_EXPECT(ReleaseFuncDesc);
+DEFINE_EXPECT(ReleaseVarDesc);
 DEFINE_EXPECT(QI_IDispatchEx);
+DEFINE_EXPECT(GetTypeInfo);
 DEFINE_EXPECT(GetIDsOfNames);
 DEFINE_EXPECT(Invoke);
 DEFINE_EXPECT(InvokeEx);
+DEFINE_EXPECT(DeferredFillIn);
+DEFINE_EXPECT(GetExceptionInfo);
+DEFINE_EXPECT(GetSourcePosition);
+DEFINE_EXPECT(GetSourceLineText);
 DEFINE_EXPECT(SetScriptSite);
 DEFINE_EXPECT(QI_IActiveScriptParse);
 DEFINE_EXPECT(GetScriptState);
@@ -118,6 +131,55 @@ static void _expect_ref(IUnknown* obj, ULONG ref, int line)
 
 static IActiveScriptSite *site;
 static SCRIPTSTATE state;
+static ITypeInfo TypeInfo;
+
+static struct
+{
+    const WCHAR *name;
+    SHORT num_args;
+    SHORT num_opt_args;
+    VARTYPE ret_type;
+    FUNCKIND func_kind;
+    INVOKEKIND invoke_kind;
+    WORD flags;
+} custom_engine_funcs[] =
+{
+    { L"foobar",    3,  0, VT_I4,     FUNC_DISPATCH,    INVOKE_FUNC,           0 },
+    { L"barfoo",   11,  2, VT_VOID,   FUNC_VIRTUAL,     INVOKE_FUNC,           FUNCFLAG_FRESTRICTED },
+    { L"empty",     0,  0, VT_EMPTY,  FUNC_PUREVIRTUAL, INVOKE_PROPERTYGET,    FUNCFLAG_FBINDABLE | FUNCFLAG_FDISPLAYBIND },
+    { L"vararg",    4, -1, VT_BSTR,   FUNC_NONVIRTUAL,  INVOKE_PROPERTYPUT,    FUNCFLAG_FREQUESTEDIT },
+    { L"static",    0,  1, VT_PTR,    FUNC_STATIC,      INVOKE_PROPERTYPUTREF, FUNCFLAG_FHIDDEN },
+    { L"deadbeef", 21, -9, VT_ERROR,  0xdeadbeef,       0xdeadbeef,            0xffff }
+};
+
+static int memid_to_func_index(MEMBERID memid)
+{
+    UINT idx = memid - 0xdeadbeef;
+    return idx < ARRAY_SIZE(custom_engine_funcs) ? idx : -1;
+}
+
+static MEMBERID func_index_to_memid(UINT idx)
+{
+    return idx + 0xdeadbeef;
+}
+
+static FUNCDESC *get_func_desc(UINT i)
+{
+    FUNCDESC *desc;
+
+    if (!(desc = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*desc))))
+        return NULL;
+
+    desc->memid = func_index_to_memid(i);
+    desc->cParams = custom_engine_funcs[i].num_args;
+    desc->cParamsOpt = custom_engine_funcs[i].num_opt_args;
+    desc->elemdescFunc.tdesc.vt = custom_engine_funcs[i].ret_type;
+    desc->elemdescFunc.paramdesc.wParamFlags = PARAMFLAG_FRETVAL;
+    desc->funckind = custom_engine_funcs[i].func_kind;
+    desc->invkind = custom_engine_funcs[i].invoke_kind;
+    desc->wFuncFlags = custom_engine_funcs[i].flags;
+    return desc;
+}
 
 static HRESULT WINAPI ActiveScriptParse_QueryInterface(IActiveScriptParse *iface, REFIID riid, void **ppv)
 {
@@ -236,6 +298,282 @@ static const IObjectSafetyVtbl ObjectSafetyVtbl = {
 
 static IObjectSafety ObjectSafety = { &ObjectSafetyVtbl };
 
+static HRESULT WINAPI TypeComp_QueryInterface(ITypeComp *iface, REFIID riid, void **ppv)
+{
+    *ppv = NULL;
+    ok(0, "unexpected call\n");
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI TypeComp_AddRef(ITypeComp *iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI TypeComp_Release(ITypeComp *iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI TypeComp_Bind(ITypeComp *iface, LPOLESTR szName, ULONG lHashVal, WORD wFlags,
+        ITypeInfo **ppTInfo, DESCKIND *pDescKind, BINDPTR *pBindPtr)
+{
+    ULONG hash = LHashValOfNameSys(sizeof(void*) == 8 ? SYS_WIN64 : SYS_WIN32, LOCALE_USER_DEFAULT, szName);
+    UINT i;
+
+    CHECK_EXPECT(Bind);
+    ok(lHashVal == hash, "wrong hash, expected 0x%08x, got 0x%08x.\n", hash, lHashVal);
+    ok(wFlags == INVOKE_FUNC, "wrong flags, got 0x%x.\n", wFlags);
+
+    *ppTInfo = NULL;
+    *pDescKind = DESCKIND_NONE;
+    pBindPtr->lptcomp = NULL;
+
+    if (!lstrcmpW(szName, L"type_mismatch"))
+        return TYPE_E_TYPEMISMATCH;
+
+    if (!lstrcmpW(szName, L"variable"))
+    {
+        if (!(pBindPtr->lpvardesc = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(VARDESC))))
+            return E_OUTOFMEMORY;
+        *ppTInfo = &TypeInfo;
+        *pDescKind = DESCKIND_VARDESC;
+        return S_OK;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(custom_engine_funcs); i++)
+    {
+        if (!lstrcmpW(szName, custom_engine_funcs[i].name))
+        {
+            *ppTInfo = &TypeInfo;
+            *pDescKind = DESCKIND_FUNCDESC;
+            pBindPtr->lpfuncdesc = get_func_desc(i);
+            return S_OK;
+        }
+    }
+
+    return S_OK;
+}
+
+static HRESULT WINAPI TypeComp_BindType(ITypeComp *iface, LPOLESTR szName, ULONG lHashVal,
+        ITypeInfo **ppTInfo, ITypeComp **ppTComp)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static const ITypeCompVtbl TypeCompVtbl = {
+    TypeComp_QueryInterface,
+    TypeComp_AddRef,
+    TypeComp_Release,
+    TypeComp_Bind,
+    TypeComp_BindType
+};
+
+static ITypeComp TypeComp = { &TypeCompVtbl };
+
+static BOOL TypeComp_available = FALSE;
+static HRESULT WINAPI TypeInfo_QueryInterface(ITypeInfo *iface, REFIID riid, void **ppv)
+{
+    *ppv = NULL;
+
+    if (IsEqualGUID(&IID_ITypeComp, riid))
+    {
+        CHECK_EXPECT(QI_ITypeComp);
+        if (TypeComp_available)
+        {
+            *ppv = &TypeComp;
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI TypeInfo_AddRef(ITypeInfo *iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI TypeInfo_Release(ITypeInfo *iface)
+{
+    return 1;
+}
+
+static UINT TypeInfo_GetTypeAttr_cFuncs;
+static HRESULT WINAPI TypeInfo_GetTypeAttr(ITypeInfo *iface, TYPEATTR **ppTypeAttr)
+{
+    CHECK_EXPECT(GetTypeAttr);
+
+    if (!(*ppTypeAttr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(TYPEATTR))))
+        return E_OUTOFMEMORY;
+
+    (*ppTypeAttr)->cFuncs = TypeInfo_GetTypeAttr_cFuncs;
+    return S_OK;
+}
+
+static HRESULT WINAPI TypeInfo_GetTypeComp(ITypeInfo *iface, ITypeComp **ppTComp)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetFuncDesc(ITypeInfo *iface, UINT index, FUNCDESC **ppFuncDesc)
+{
+    CHECK_EXPECT(GetFuncDesc);
+
+    if (index >= ARRAY_SIZE(custom_engine_funcs))
+        return E_INVALIDARG;
+
+    *ppFuncDesc = get_func_desc(index);
+    return S_OK;
+}
+
+static HRESULT WINAPI TypeInfo_GetVarDesc(ITypeInfo *iface, UINT index, VARDESC **ppVarDesc)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetNames(ITypeInfo *iface, MEMBERID memid, BSTR *rgBstrNames,
+        UINT cMaxNames, UINT *pcNames)
+{
+    int idx;
+
+    CHECK_EXPECT(GetNames);
+    ok(cMaxNames == 1, "unexpected cMaxNames, got %u.\n", cMaxNames);
+    ok(rgBstrNames != NULL, "rgBstrNames is NULL.\n");
+    ok(pcNames != NULL, "pcNames is NULL.\n");
+
+    idx = memid_to_func_index(memid);
+    if (idx != -1)
+    {
+        *rgBstrNames = SysAllocString(custom_engine_funcs[idx].name);
+        *pcNames = 1;
+        return S_OK;
+    }
+
+    *pcNames = 0;
+    return TYPE_E_ELEMENTNOTFOUND;
+}
+
+static HRESULT WINAPI TypeInfo_GetRefTypeOfImplType(ITypeInfo *iface, UINT index, HREFTYPE *pRefType)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetImplTypeFlags(ITypeInfo *iface, UINT index, INT *pImplTypeFlags)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetIDsOfNames(ITypeInfo *iface, LPOLESTR *rgszNames, UINT cNames,
+        MEMBERID *pMemId)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_Invoke(ITypeInfo *iface, PVOID pvInstance, MEMBERID memid, WORD wFlags,
+        DISPPARAMS *pDispParams, VARIANT *pVarResult, EXCEPINFO *pExcepInfo, UINT *puArgErr)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetDocumentation(ITypeInfo *iface, MEMBERID memid, BSTR *pBstrName,
+        BSTR *pBstrDocString, DWORD *pdwHelpContext, BSTR *pBstrHelpFile)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetDllEntry(ITypeInfo *iface, MEMBERID memid, INVOKEKIND invKind,
+        BSTR *pBstrDllName, BSTR *pBstrName, WORD *pwOrdinal)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetRefTypeInfo(ITypeInfo *iface, HREFTYPE hRefType, ITypeInfo **ppTInfo)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_AddressOfMember(ITypeInfo *iface, MEMBERID memid, INVOKEKIND invKind, PVOID *ppv)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_CreateInstance(ITypeInfo *iface, IUnknown *pUnkOuter, REFIID riid, PVOID *ppvObj)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetMops(ITypeInfo *iface, MEMBERID memid, BSTR *pBstrMops)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI TypeInfo_GetContainingTypeLib(ITypeInfo *iface, ITypeLib **ppTLib, UINT *pIndex)
+{
+    ok(0, "unexpected call\n");
+    return E_NOTIMPL;
+}
+
+static void WINAPI TypeInfo_ReleaseTypeAttr(ITypeInfo *iface, TYPEATTR *pTypeAttr)
+{
+    CHECK_EXPECT(ReleaseTypeAttr);
+    HeapFree(GetProcessHeap(), 0, pTypeAttr);
+}
+
+static void WINAPI TypeInfo_ReleaseFuncDesc(ITypeInfo *iface, FUNCDESC *pFuncDesc)
+{
+    CHECK_EXPECT(ReleaseFuncDesc);
+    HeapFree(GetProcessHeap(), 0, pFuncDesc);
+}
+
+static void WINAPI TypeInfo_ReleaseVarDesc(ITypeInfo *iface, VARDESC *pVarDesc)
+{
+    CHECK_EXPECT(ReleaseVarDesc);
+    HeapFree(GetProcessHeap(), 0, pVarDesc);
+}
+
+static const ITypeInfoVtbl TypeInfoVtbl = {
+    TypeInfo_QueryInterface,
+    TypeInfo_AddRef,
+    TypeInfo_Release,
+    TypeInfo_GetTypeAttr,
+    TypeInfo_GetTypeComp,
+    TypeInfo_GetFuncDesc,
+    TypeInfo_GetVarDesc,
+    TypeInfo_GetNames,
+    TypeInfo_GetRefTypeOfImplType,
+    TypeInfo_GetImplTypeFlags,
+    TypeInfo_GetIDsOfNames,
+    TypeInfo_Invoke,
+    TypeInfo_GetDocumentation,
+    TypeInfo_GetDllEntry,
+    TypeInfo_GetRefTypeInfo,
+    TypeInfo_AddressOfMember,
+    TypeInfo_CreateInstance,
+    TypeInfo_GetMops,
+    TypeInfo_GetContainingTypeLib,
+    TypeInfo_ReleaseTypeAttr,
+    TypeInfo_ReleaseFuncDesc,
+    TypeInfo_ReleaseVarDesc
+};
+
+static ITypeInfo TypeInfo = { &TypeInfoVtbl };
+
 static BOOL DispatchEx_available = FALSE;
 static HRESULT WINAPI DispatchEx_QueryInterface(IDispatchEx *iface, REFIID riid, void **ppv)
 {
@@ -274,8 +612,12 @@ static HRESULT WINAPI DispatchEx_GetTypeInfoCount(IDispatchEx *iface, UINT *pcti
 
 static HRESULT WINAPI DispatchEx_GetTypeInfo(IDispatchEx *iface, UINT iTInfo, LCID lcid, ITypeInfo **ppTInfo)
 {
-    ok(0, "unexpected call\n");
-    return E_NOTIMPL;
+    CHECK_EXPECT(GetTypeInfo);
+    ok(iTInfo == 0, "unexpected iTInfo %u.\n", iTInfo);
+    ok(lcid == LOCALE_USER_DEFAULT, "unexpected lcid %u\n", lcid);
+
+    *ppTInfo = &TypeInfo;
+    return S_OK;
 }
 
 static BSTR Dispatch_expected_name;
@@ -616,6 +958,94 @@ static const IActiveScriptVtbl ActiveScriptVtbl = {
 };
 
 static IActiveScript ActiveScript = { &ActiveScriptVtbl };
+
+static HRESULT WINAPI ActiveScriptError_QueryInterface(IActiveScriptError *iface, REFIID riid, void **ppv)
+{
+    *ppv = NULL;
+
+    if(IsEqualGUID(&IID_IUnknown, riid) || IsEqualGUID(&IID_IActiveScriptError, riid)) {
+        *ppv = iface;
+        return S_OK;
+    }
+
+    ok(0, "unexpected riid %s\n", wine_dbgstr_guid(riid));
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI ActiveScriptError_AddRef(IActiveScriptError *iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI ActiveScriptError_Release(IActiveScriptError *iface)
+{
+    return 1;
+}
+
+static unsigned ActiveScriptError_stage = 0;
+
+static HRESULT WINAPI ActiveScriptError_DeferredFillIn(EXCEPINFO *pexcepinfo)
+{
+    CHECK_EXPECT(DeferredFillIn);
+
+    pexcepinfo->bstrSource = SysAllocString(L"foobar");
+    pexcepinfo->bstrDescription = SysAllocString(L"barfoo");
+
+    /* Failure is ignored */
+    return E_FAIL;
+}
+
+static HRESULT WINAPI ActiveScriptError_GetExceptionInfo(IActiveScriptError *iface, EXCEPINFO *pexcepinfo)
+{
+    CHECK_EXPECT(GetExceptionInfo);
+
+    memset(pexcepinfo, 0, sizeof(*pexcepinfo));
+    pexcepinfo->wCode = 0xdead;
+    pexcepinfo->pfnDeferredFillIn = ActiveScriptError_DeferredFillIn;
+
+    if (ActiveScriptError_stage == 0) return E_FAIL;
+    if (ActiveScriptError_stage == 2)
+    {
+        pexcepinfo->wCode = 0;
+        pexcepinfo->scode = 0xbeef;
+        pexcepinfo->bstrSource = SysAllocString(L"source");
+        pexcepinfo->pfnDeferredFillIn = NULL;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI ActiveScriptError_GetSourcePosition(IActiveScriptError *iface, DWORD *pdwSourceContext,
+                                                          ULONG *pulLineNumber, LONG *pichCharPosition)
+{
+    CHECK_EXPECT(GetSourcePosition);
+
+    *pdwSourceContext = 0xdeadbeef;
+    *pulLineNumber = 42;
+    *pichCharPosition = 10;
+
+    return (ActiveScriptError_stage == 0) ? E_FAIL : S_OK;
+}
+
+static HRESULT WINAPI ActiveScriptError_GetSourceLineText(IActiveScriptError *iface, BSTR *pbstrSourceLine)
+{
+    CHECK_EXPECT(GetSourceLineText);
+
+    *pbstrSourceLine = SysAllocString(L"source line");
+
+    /* Failure is ignored */
+    return E_FAIL;
+}
+
+static const IActiveScriptErrorVtbl ActiveScriptErrorVtbl = {
+    ActiveScriptError_QueryInterface,
+    ActiveScriptError_AddRef,
+    ActiveScriptError_Release,
+    ActiveScriptError_GetExceptionInfo,
+    ActiveScriptError_GetSourcePosition,
+    ActiveScriptError_GetSourceLineText
+};
+
+static IActiveScriptError ActiveScriptError = { &ActiveScriptErrorVtbl };
 
 static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
 {
@@ -1728,8 +2158,9 @@ static void test_State(void)
     }
 }
 
-#define CHECK_ERROR(sc,exp_num) _check_error(sc, exp_num, __LINE__)
-static void _check_error(IScriptControl *sc, LONG exp_num, int line)
+#define CHECK_ERROR(sc,exp_num) _check_error(sc, exp_num, FALSE, __LINE__)
+#define CHECK_ERROR_TODO(sc,exp_num) _check_error(sc, exp_num, TRUE, __LINE__)
+static void _check_error(IScriptControl *sc, LONG exp_num, BOOL todo, int line)
 {
     IScriptError *script_err;
     LONG error_num;
@@ -1737,15 +2168,13 @@ static void _check_error(IScriptControl *sc, LONG exp_num, int line)
 
     hr = IScriptControl_get_Error(sc, &script_err);
     ok_(__FILE__,line)(hr == S_OK, "IScriptControl_get_Error failed: 0x%08x.\n", hr);
-    if (SUCCEEDED(hr))
-    {
-        error_num = 0xdeadbeef;
-        hr = IScriptError_get_Number(script_err, &error_num);
-        ok_(__FILE__,line)(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
-        ok_(__FILE__,line)(error_num == exp_num, "got wrong error number: %d, expected %d.\n",
-                           error_num, exp_num);
-        IScriptError_Release(script_err);
-    }
+    error_num = 0xdeadbeef;
+    hr = IScriptError_get_Number(script_err, &error_num);
+    ok_(__FILE__,line)(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+todo_wine_if(todo == TRUE)
+    ok_(__FILE__,line)(error_num == exp_num, "got wrong error number: %d, expected %d.\n",
+                       error_num, exp_num);
+    IScriptError_Release(script_err);
 }
 
 static void test_IScriptControl_Eval(void)
@@ -1774,7 +2203,7 @@ static void test_IScriptControl_Eval(void)
     ok(hr == E_FAIL, "IScriptControl_Eval returned: 0x%08x.\n", hr);
     ok((V_VT(&var) == VT_EMPTY) && (V_I4(&var) == 0xdeadbeef), "V_VT(var) = %d, V_I4(var) = %d.\n",
        V_VT(&var), V_I4(&var));
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
 
     script_str = SysAllocString(L"1 + 1");
     V_VT(&var) = VT_NULL;
@@ -1822,7 +2251,7 @@ static void test_IScriptControl_Eval(void)
     ok(V_I4(&var) == 0xdeadbeef || broken(V_I4(&var) == 0) /* after Win8 */,
        "V_I4(var) = %d.\n", V_I4(&var));
     SysFreeString(script_str);
-    todo_wine CHECK_ERROR(sc, 1004);
+    CHECK_ERROR_TODO(sc, 1004);
 
     script_str = SysAllocString(L"var2 = var1 + var2");
     V_VT(&var) = VT_NULL;
@@ -1949,13 +2378,13 @@ static void test_IScriptControl_AddCode(void)
     hr = IScriptControl_AddCode(sc, code_str);
     ok(hr == S_OK, "IScriptControl_AddCode failed: 0x%08x.\n", hr);
     SysFreeString(code_str);
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
 
     code_str = SysAllocString(L"invalid syntax");
     hr = IScriptControl_AddCode(sc, code_str);
     todo_wine ok(hr == 0x800a03ec, "IScriptControl_AddCode returned: 0x%08x.\n", hr);
     SysFreeString(code_str);
-    todo_wine CHECK_ERROR(sc, 1004);
+    CHECK_ERROR_TODO(sc, 1004);
 
     IScriptControl_Release(sc);
 
@@ -2050,13 +2479,13 @@ static void test_IScriptControl_ExecuteStatement(void)
     hr = IScriptControl_ExecuteStatement(sc, str);
     ok(hr == S_OK, "IScriptControl_ExecuteStatement failed: 0x%08x.\n", hr);
     SysFreeString(str);
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
 
     str = SysAllocString(L"invalid syntax");
     hr = IScriptControl_ExecuteStatement(sc, str);
     todo_wine ok(hr == 0x800a03ec, "IScriptControl_ExecuteStatement returned: 0x%08x.\n", hr);
     SysFreeString(str);
-    todo_wine CHECK_ERROR(sc, 1004);
+    CHECK_ERROR_TODO(sc, 1004);
 
     IScriptControl_Release(sc);
 
@@ -2162,13 +2591,13 @@ static void test_IScriptControl_Run(void)
     str = SysAllocString(L"foobar");
     hr = IScriptControl_Run(sc, str, &params, &var);
     ok(hr == DISP_E_UNKNOWNNAME, "IScriptControl_Run failed: 0x%08x.\n", hr);
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
     SysFreeString(str);
 
     str = SysAllocString(L"function subtract(a, b) { return a - b; }\n");
     hr = IScriptControl_AddCode(sc, str);
     ok(hr == S_OK, "IScriptControl_AddCode failed: 0x%08x.\n", hr);
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
     SysFreeString(str);
 
     str = SysAllocString(L"Subtract");
@@ -2179,12 +2608,12 @@ static void test_IScriptControl_Run(void)
     str = SysAllocString(L"subtract");
     hr = IScriptControl_Run(sc, str, &params, NULL);
     ok(hr == E_POINTER, "IScriptControl_Run failed: 0x%08x.\n", hr);
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
 
     hr = IScriptControl_Run(sc, str, &params, &var);
     ok(hr == S_OK, "IScriptControl_Run failed: 0x%08x.\n", hr);
     ok((V_VT(&var) == VT_I4) && (V_I4(&var) == 7), "V_VT(var) = %d, V_I4(var) = %d.\n", V_VT(&var), V_I4(&var));
-    todo_wine CHECK_ERROR(sc, 0);
+    CHECK_ERROR(sc, 0);
     SafeArrayDestroy(params);
 
     /* The array's other dimensions are ignored */
@@ -2316,6 +2745,7 @@ static void test_IScriptControl_get_Modules(void)
     LONG idx1_0[] = { 0, 1 };
     LONG idx1_1[] = { 1, 1 };
 
+    IScriptProcedureCollection *procs;
     IEnumVARIANT *enumvar, *enumvar2;
     IScriptModuleCollection *mods;
     VARIANT var, vars[3];
@@ -2602,6 +3032,8 @@ static void test_IScriptControl_get_Modules(void)
     ok(hr == E_FAIL, "IScriptModule_get_Name returned: 0x%08x.\n", hr);
     hr = IScriptModule_get_CodeObject(mod, &disp);
     ok(hr == E_FAIL, "IScriptModule_get_CodeObject returned: 0x%08x.\n", hr);
+    hr = IScriptModule_get_Procedures(mod, &procs);
+    ok(hr == E_FAIL, "IScriptModule_get_Procedures returned: 0x%08x.\n", hr);
     str = SysAllocString(L"function closed() { }\n");
     hr = IScriptModule_AddCode(mod, str);
     ok(hr == E_FAIL, "IScriptModule_AddCode failed: 0x%08x.\n", hr);
@@ -2883,6 +3315,274 @@ static void test_IScriptControl_get_Modules(void)
     }
 }
 
+static void test_IScriptControl_get_Error(void)
+{
+    IScriptError *error, *error2;
+    IScriptControl *sc;
+    HRESULT hr;
+    BSTR str;
+    LONG x;
+
+    hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                          &IID_IScriptControl, (void**)&sc);
+    ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+    hr = IScriptControl_get_Error(sc, NULL);
+    ok(hr == E_POINTER, "IScriptControl_get_Error returned: 0x%08x.\n", hr);
+    hr = IScriptControl_get_Error(sc, &error);
+    ok(hr == S_OK, "IScriptControl_get_Error failed: 0x%08x.\n", hr);
+
+    x = 0xdeadbeef;
+    hr = IScriptError_get_Number(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error Number is not 0, got %d.\n", x);
+    hr = IScriptError_get_Source(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Source failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error Source is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_Description(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Description failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error Description is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_HelpFile(error, &str);
+    ok(hr == S_OK, "IScriptError_get_HelpFile failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error HelpFile is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_HelpContext(error, &x);
+    ok(hr == S_OK, "IScriptError_get_HelpContext failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error HelpContext is not 0, got %d.\n", x);
+    hr = IScriptError_get_Text(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Text failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error Text is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_Line(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Line failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error Line is not 0, got %d.\n", x);
+    hr = IScriptError_get_Column(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Column failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error Column is not 0, got %d.\n", x);
+
+    str = SysAllocString(L"jscript");
+    hr = IScriptControl_put_Language(sc, str);
+    ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+    SysFreeString(str);
+
+    str = SysAllocString(L""
+        "var valid_var = 1;\n"
+        "// comment\n"
+        "this is an invalid line\n");
+    hr = IScriptControl_AddCode(sc, str);
+    ok(FAILED(hr), "IScriptControl_AddCode succeeded: 0x%08x.\n", hr);
+    SysFreeString(str);
+
+    x = 0xdeadbeef;
+    hr = IScriptError_get_Number(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+    todo_wine ok(x > 1000, "Error Number is wrong, got %d.\n", x);
+    hr = IScriptError_get_Source(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Source failed: 0x%08x.\n", hr);
+    ok(str != NULL, "Error Source is (null).\n");
+    SysFreeString(str);
+    hr = IScriptError_get_Description(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Description failed: 0x%08x.\n", hr);
+    ok(str != NULL, "Error Description is (null).\n");
+    SysFreeString(str);
+    hr = IScriptError_get_Text(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Text failed: 0x%08x.\n", hr);
+    ok(!lstrcmpW(str, L"this is an invalid line"), "Error Text is wrong, got %s.\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+    hr = IScriptError_get_Line(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Line failed: 0x%08x.\n", hr);
+    ok(x == 3, "Error Line is not 3, got %d.\n", x);
+    hr = IScriptError_get_Column(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Column failed: 0x%08x.\n", hr);
+    ok(x == 5, "Error Column is not 5, got %d.\n", x);
+
+    hr = IScriptError_Clear(error);
+    ok(hr == S_OK, "IScriptError_Clear failed: 0x%08x.\n", hr);
+    x = 0xdeadbeef;
+    hr = IScriptError_get_Number(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error Number is not 0, got %d.\n", x);
+    hr = IScriptError_get_Source(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Source failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error Source is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_Description(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Description failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error Description is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_HelpFile(error, &str);
+    ok(hr == S_OK, "IScriptError_get_HelpFile failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error HelpFile is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_HelpContext(error, &x);
+    ok(hr == S_OK, "IScriptError_get_HelpContext failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error HelpContext is not 0, got %d.\n", x);
+    hr = IScriptError_get_Text(error, &str);
+    ok(hr == S_OK, "IScriptError_get_Text failed: 0x%08x.\n", hr);
+    ok(str == NULL, "Error Text is not (null), got %s.\n", wine_dbgstr_w(str));
+    hr = IScriptError_get_Line(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Line failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error Line is not 0, got %d.\n", x);
+    hr = IScriptError_get_Column(error, &x);
+    ok(hr == S_OK, "IScriptError_get_Column failed: 0x%08x.\n", hr);
+    ok(x == 0, "Error Column is not 0, got %d.\n", x);
+
+    hr = IScriptControl_get_Error(sc, &error2);
+    ok(hr == S_OK, "IScriptControl_get_Error failed: 0x%08x.\n", hr);
+    ok(error == error2, "Error objects are not the same (%p vs %p).\n", error, error2);
+    IScriptError_Release(error2);
+
+    IScriptError_Release(error);
+    IScriptControl_Release(sc);
+
+    /* custom script engine */
+    if (have_custom_engine)
+    {
+        hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                              &IID_IScriptControl, (void**)&sc);
+        ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+        SET_EXPECT(CreateInstance);
+        SET_EXPECT(SetInterfaceSafetyOptions);
+        SET_EXPECT(SetScriptSite);
+        SET_EXPECT(QI_IActiveScriptParse);
+        SET_EXPECT(InitNew);
+        str = SysAllocString(L"testscript");
+        hr = IScriptControl_put_Language(sc, str);
+        ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+        SysFreeString(str);
+        CHECK_CALLED(CreateInstance);
+        CHECK_CALLED(SetInterfaceSafetyOptions);
+        CHECK_CALLED(SetScriptSite);
+        CHECK_CALLED(QI_IActiveScriptParse);
+        CHECK_CALLED(InitNew);
+
+        hr = IScriptControl_get_Error(sc, &error);
+        ok(hr == S_OK, "IScriptControl_get_Error failed: 0x%08x.\n", hr);
+
+        x = 0xdeadbeef;
+        hr = IScriptError_get_Number(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+        ok(x == 0, "Error Number is not 0, got %d.\n", x);
+
+        /* The calls are cached even if they fail */
+        ActiveScriptError_stage = 0;
+        hr = IActiveScriptSite_OnScriptError(site, &ActiveScriptError);
+        ok(hr == S_FALSE, "IActiveScriptSite_OnScriptError returned: 0x%08x.\n", hr);
+
+        SET_EXPECT(GetExceptionInfo);
+        x = 0xdeadbeef;
+        hr = IScriptError_get_Number(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+        ok(x == 0, "Error Number is not 0, got %d.\n", x);
+        CHECK_CALLED(GetExceptionInfo);
+        hr = IScriptError_get_Source(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Source failed: 0x%08x.\n", hr);
+        ok(str == NULL, "Error Source is not (null), got %s.\n", wine_dbgstr_w(str));
+        hr = IScriptError_get_Description(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Description failed: 0x%08x.\n", hr);
+        ok(str == NULL, "Error Description is not (null), got %s.\n", wine_dbgstr_w(str));
+        hr = IScriptError_get_HelpFile(error, &str);
+        ok(hr == S_OK, "IScriptError_get_HelpFile failed: 0x%08x.\n", hr);
+        ok(str == NULL, "Error HelpFile is not (null), got %s.\n", wine_dbgstr_w(str));
+        hr = IScriptError_get_HelpContext(error, &x);
+        ok(hr == S_OK, "IScriptError_get_HelpContext failed: 0x%08x.\n", hr);
+        ok(x == 0, "Error HelpContext is not 0, got %d.\n", x);
+
+        SET_EXPECT(GetSourceLineText);
+        hr = IScriptError_get_Text(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Text failed: 0x%08x.\n", hr);
+        ok(!lstrcmpW(str, L"source line"), "Error Text is wrong, got %s.\n", wine_dbgstr_w(str));
+        SysFreeString(str);
+        CHECK_CALLED(GetSourceLineText);
+
+        SET_EXPECT(GetSourcePosition);
+        hr = IScriptError_get_Line(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Line failed: 0x%08x.\n", hr);
+        ok(x == 0, "Error Line is not 0, got %d.\n", x);
+        CHECK_CALLED(GetSourcePosition);
+        hr = IScriptError_get_Column(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Column failed: 0x%08x.\n", hr);
+        ok(x == 0, "Error Column is not 0, got %d.\n", x);
+
+        /* Check with deferred fill-in */
+        ActiveScriptError_stage = 1;
+        hr = IActiveScriptSite_OnScriptError(site, &ActiveScriptError);
+        ok(hr == S_FALSE, "IActiveScriptSite_OnScriptError returned: 0x%08x.\n", hr);
+
+        SET_EXPECT(GetExceptionInfo);
+        SET_EXPECT(DeferredFillIn);
+        x = 0xdeadbeef;
+        hr = IScriptError_get_Number(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+        ok(x == 0, "Error Number is not 0, got %d.\n", x);
+        CHECK_CALLED(GetExceptionInfo);
+        CHECK_CALLED(DeferredFillIn);
+        hr = IScriptError_get_Source(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Source failed: 0x%08x.\n", hr);
+        ok(!lstrcmpW(str, L"foobar"), "Error Source is wrong, got %s.\n", wine_dbgstr_w(str));
+        SysFreeString(str);
+        hr = IScriptError_get_Description(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Description failed: 0x%08x.\n", hr);
+        ok(!lstrcmpW(str, L"barfoo"), "Error Description is wrong, got %s.\n", wine_dbgstr_w(str));
+        SysFreeString(str);
+
+        SET_EXPECT(GetSourceLineText);
+        hr = IScriptError_get_Text(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Text failed: 0x%08x.\n", hr);
+        ok(!lstrcmpW(str, L"source line"), "Error Text is wrong, got %s.\n", wine_dbgstr_w(str));
+        SysFreeString(str);
+        CHECK_CALLED(GetSourceLineText);
+
+        SET_EXPECT(GetSourcePosition);
+        hr = IScriptError_get_Line(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Line failed: 0x%08x.\n", hr);
+        ok(x == 42, "Error Line is not 42, got %d.\n", x);
+        CHECK_CALLED(GetSourcePosition);
+        hr = IScriptError_get_Column(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Column failed: 0x%08x.\n", hr);
+        ok(x == 10, "Error Column is not 10, got %d.\n", x);
+
+        /* Check without deferred fill-in, but using scode */
+        ActiveScriptError_stage = 2;
+        hr = IActiveScriptSite_OnScriptError(site, &ActiveScriptError);
+        ok(hr == S_FALSE, "IActiveScriptSite_OnScriptError returned: 0x%08x.\n", hr);
+
+        SET_EXPECT(GetExceptionInfo);
+        x = 0xdeadbeef;
+        hr = IScriptError_get_Number(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Number failed: 0x%08x.\n", hr);
+        ok(x == 0xbeef, "Error Number is not 0xbeef, got 0x%04x.\n", x);
+        CHECK_CALLED(GetExceptionInfo);
+        hr = IScriptError_get_Source(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Source failed: 0x%08x.\n", hr);
+        ok(!lstrcmpW(str, L"source"), "Error Source is wrong, got %s.\n", wine_dbgstr_w(str));
+        SysFreeString(str);
+        hr = IScriptError_get_Description(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Description failed: 0x%08x.\n", hr);
+        ok(str == NULL, "Error Description is not (null), got %s.\n", wine_dbgstr_w(str));
+
+        SET_EXPECT(GetSourceLineText);
+        hr = IScriptError_get_Text(error, &str);
+        ok(hr == S_OK, "IScriptError_get_Text failed: 0x%08x.\n", hr);
+        ok(!lstrcmpW(str, L"source line"), "Error Text is wrong, got %s.\n", wine_dbgstr_w(str));
+        SysFreeString(str);
+        CHECK_CALLED(GetSourceLineText);
+
+        SET_EXPECT(GetSourcePosition);
+        hr = IScriptError_get_Line(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Line failed: 0x%08x.\n", hr);
+        ok(x == 42, "Error Line is not 42, got %d.\n", x);
+        CHECK_CALLED(GetSourcePosition);
+        hr = IScriptError_get_Column(error, &x);
+        ok(hr == S_OK, "IScriptError_get_Column failed: 0x%08x.\n", hr);
+        ok(x == 10, "Error Column is not 10, got %d.\n", x);
+
+        IActiveScriptSite_Release(site);
+
+        SET_EXPECT(Close);
+        IScriptControl_Release(sc);
+        CHECK_CALLED(Close);
+
+        IScriptError_Release(error);
+    }
+}
+
 static void test_IScriptControl_get_CodeObject(void)
 {
     IScriptControl *sc;
@@ -2949,6 +3649,426 @@ static void test_IScriptControl_get_CodeObject(void)
     }
 }
 
+static void test_IScriptControl_get_Procedures(void)
+{
+    IScriptProcedureCollection *procs, *procs2;
+    IEnumVARIANT *enumvar, *enumvar2;
+    IScriptProcedure *proc, *proc2;
+    IScriptControl *sc;
+    IUnknown *unknown;
+    VARIANT_BOOL vbool;
+    ULONG fetched;
+    VARIANT var;
+    LONG count;
+    HRESULT hr;
+    BSTR str;
+    UINT i;
+
+    hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                          &IID_IScriptControl, (void**)&sc);
+    ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+    hr = IScriptControl_get_Procedures(sc, &procs);
+    ok(hr == E_FAIL, "IScriptControl_get_Procedures returned: 0x%08x.\n", hr);
+
+    str = SysAllocString(L"jscript");
+    hr = IScriptControl_put_Language(sc, str);
+    ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+    SysFreeString(str);
+
+    hr = IScriptControl_get_Procedures(sc, &procs);
+    ok(hr == S_OK, "IScriptControl_get_Procedures failed: 0x%08x.\n", hr);
+
+    hr = IScriptProcedureCollection_get_Count(procs, NULL);
+    ok(hr == E_POINTER, "IScriptProcedureCollection_get_Count returned: 0x%08x.\n", hr);
+    hr = IScriptProcedureCollection_get_Count(procs, &count);
+    ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+    ok(count == 0, "count is not 0, got %d.\n", count);
+
+    V_VT(&var) = VT_I4;
+    V_I4(&var) = -1;
+    hr = IScriptProcedureCollection_get_Item(procs, var, NULL);
+    ok(hr == E_POINTER, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+    hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+    ok(hr == 0x800a0009, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+
+    str = SysAllocString(L""
+        "function add(a, b) { return a + b; }\n"
+        "function nop(a) { }\n"
+        "function muladd(a, b, c) { return a * b + c; }\n"
+    );
+    hr = IScriptControl_AddCode(sc, str);
+    ok(hr == S_OK, "IScriptControl_AddCode failed: 0x%08x.\n", hr);
+    CHECK_ERROR(sc, 0);
+    SysFreeString(str);
+
+    hr = IScriptProcedureCollection_get_Count(procs, &count);
+    ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+    ok(count == 3, "count is not 3, got %d.\n", count);
+
+    V_VT(&var) = VT_I4;
+    V_I4(&var) = 1;
+    IScriptProcedureCollection_AddRef(procs);
+    i = IScriptProcedureCollection_Release(procs);
+    hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+    ok(hr == S_OK, "IScriptProcedureCollection_get_Item failed: 0x%08x.\n", hr);
+    IScriptProcedureCollection_AddRef(procs);
+    ok(i == IScriptProcedureCollection_Release(procs),
+        "IScriptProcedureCollection_get_Item should not have added a ref to the collection.\n");
+    hr = IScriptProcedure_get_Name(proc, NULL);
+    ok(hr == E_POINTER, "IScriptProcedure_get_Name returned: 0x%08x.\n", hr);
+    hr = IScriptProcedure_get_Name(proc, &str);
+    ok(hr == S_OK, "IScriptProcedure_get_Name failed: 0x%08x.\n", hr);
+    ok(!lstrcmpW(str, L"add"), "Wrong name, got %s.\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+    hr = IScriptProcedure_get_NumArgs(proc, NULL);
+    ok(hr == E_POINTER, "IScriptProcedure_get_NumArgs returned: 0x%08x.\n", hr);
+    hr = IScriptProcedure_get_NumArgs(proc, &count);
+    ok(hr == S_OK, "IScriptProcedure_get_NumArgs failed: 0x%08x.\n", hr);
+    ok(count == 2, "Wrong NumArgs, got %d.\n", count);
+    hr = IScriptProcedure_get_HasReturnValue(proc, NULL);
+    ok(hr == E_POINTER, "IScriptProcedure_get_HasReturnValue returned: 0x%08x.\n", hr);
+    hr = IScriptProcedure_get_HasReturnValue(proc, &vbool);
+    ok(hr == S_OK, "IScriptProcedure_get_HasReturnValue failed: 0x%08x.\n", hr);
+    ok(vbool == VARIANT_TRUE, "HasReturnValue did not return True, got %x.\n", vbool);
+    IScriptProcedure_Release(proc);
+
+    V_VT(&var) = VT_BSTR;
+    V_BSTR(&var) = SysAllocString(L"Nop");
+    hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+    ok(hr == S_OK, "IScriptProcedureCollection_get_Item failed: 0x%08x.\n", hr);
+    ok(V_VT(&var) == VT_BSTR, "var type not BSTR, got %d.\n", V_VT(&var));
+    VariantClear(&var);
+    hr = IScriptProcedure_get_Name(proc, &str);
+    ok(hr == S_OK, "IScriptProcedure_get_Name failed: 0x%08x.\n", hr);
+    ok(!lstrcmpW(str, L"nop"), "Wrong name, got %s.\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+    hr = IScriptProcedure_get_NumArgs(proc, &count);
+    ok(hr == S_OK, "IScriptProcedure_get_NumArgs failed: 0x%08x.\n", hr);
+    ok(count == 1, "Wrong NumArgs, got %d.\n", count);
+    hr = IScriptProcedure_get_HasReturnValue(proc, &vbool);
+    ok(hr == S_OK, "IScriptProcedure_get_HasReturnValue failed: 0x%08x.\n", hr);
+    ok(vbool == VARIANT_TRUE, "HasReturnValue did not return True, got %x.\n", vbool);
+    IScriptProcedure_Release(proc);
+
+    V_VT(&var) = VT_R8;
+    V_R8(&var) = 3.0;
+    hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+    ok(hr == S_OK, "IScriptProcedureCollection_get_Item failed: 0x%08x.\n", hr);
+    hr = IScriptProcedure_get_Name(proc, &str);
+    ok(hr == S_OK, "IScriptProcedure_get_Name failed: 0x%08x.\n", hr);
+    ok(!lstrcmpW(str, L"muladd"), "Wrong name, got %s.\n", wine_dbgstr_w(str));
+    SysFreeString(str);
+    hr = IScriptProcedure_get_NumArgs(proc, &count);
+    ok(hr == S_OK, "IScriptProcedure_get_NumArgs failed: 0x%08x.\n", hr);
+    ok(count == 3, "Wrong NumArgs, got %d.\n", count);
+    IScriptProcedure_Release(proc);
+
+    IScriptProcedureCollection_Release(procs);
+    IScriptControl_Release(sc);
+
+    if (have_custom_engine)
+    {
+        hr = CoCreateInstance(&CLSID_ScriptControl, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+                              &IID_IScriptControl, (void**)&sc);
+        ok(hr == S_OK, "Failed to create IScriptControl interface: 0x%08x.\n", hr);
+
+        SET_EXPECT(CreateInstance);
+        SET_EXPECT(SetInterfaceSafetyOptions);
+        SET_EXPECT(SetScriptSite);
+        SET_EXPECT(QI_IActiveScriptParse);
+        SET_EXPECT(InitNew);
+
+        str = SysAllocString(L"testscript");
+        hr = IScriptControl_put_Language(sc, str);
+        ok(hr == S_OK, "IScriptControl_put_Language failed: 0x%08x.\n", hr);
+        SysFreeString(str);
+
+        CHECK_CALLED(CreateInstance);
+        CHECK_CALLED(SetInterfaceSafetyOptions);
+        CHECK_CALLED(SetScriptSite);
+        CHECK_CALLED(QI_IActiveScriptParse);
+        CHECK_CALLED(InitNew);
+
+        hr = IScriptControl_get_Procedures(sc, &procs);
+        ok(hr == S_OK, "IScriptControl_get_Procedures failed: 0x%08x.\n", hr);
+        hr = IScriptControl_get_Procedures(sc, &procs2);
+        ok(hr == S_OK, "IScriptControl_get_Procedures failed: 0x%08x.\n", hr);
+        ok(procs == procs2, "Procedure collections are not the same (%p vs %p).\n", procs, procs2);
+        IScriptProcedureCollection_Release(procs2);
+
+        GetScriptDispatch_expected_name = NULL;
+        SET_EXPECT(SetScriptState_STARTED);
+        SET_EXPECT(GetScriptDispatch);
+        SET_EXPECT(GetTypeInfo);
+        SET_EXPECT(GetTypeAttr);
+        SET_EXPECT(ReleaseTypeAttr);
+        TypeInfo_GetTypeAttr_cFuncs = 1337;
+        hr = IScriptProcedureCollection_get_Count(procs, &count);
+        ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+        ok(count == 1337, "count is not 1337, got %d.\n", count);
+        CHECK_CALLED(SetScriptState_STARTED);
+        CHECK_CALLED(GetScriptDispatch);
+        CHECK_CALLED(GetTypeInfo);
+        CHECK_CALLED(GetTypeAttr);
+        CHECK_CALLED(ReleaseTypeAttr);
+        TypeInfo_GetTypeAttr_cFuncs = ARRAY_SIZE(custom_engine_funcs);
+        count = 0;
+        hr = IScriptProcedureCollection_get_Count(procs, &count);
+        ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+        ok(count == 1337, "count is not 1337, got %d.\n", count);
+
+        /* Reload the collection to update the cached function count */
+        IScriptProcedureCollection_Release(procs);
+        hr = IScriptControl_get_Procedures(sc, &procs);
+        ok(hr == S_OK, "IScriptControl_get_Procedures failed: 0x%08x.\n", hr);
+        count = 0;
+        SET_EXPECT(GetTypeAttr);
+        SET_EXPECT(ReleaseTypeAttr);
+        hr = IScriptProcedureCollection_get_Count(procs, &count);
+        ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+        ok(count == ARRAY_SIZE(custom_engine_funcs), "count is not %u, got %d.\n", TypeInfo_GetTypeAttr_cFuncs, count);
+        CHECK_CALLED(GetTypeAttr);
+        CHECK_CALLED(ReleaseTypeAttr);
+
+        /* Adding code reloads the typeinfo the next time */
+        SET_EXPECT(ParseScriptText);
+        parse_item_name = NULL;
+        parse_flags = SCRIPTTEXT_ISVISIBLE;
+        str = SysAllocString(L" ");
+        hr = IScriptControl_AddCode(sc, str);
+        ok(hr == S_OK, "IScriptControl_AddCode failed: 0x%08x.\n", hr);
+        SysFreeString(str);
+        CHECK_ERROR(sc, 0);
+        CHECK_CALLED(ParseScriptText);
+
+        GetScriptDispatch_expected_name = NULL;
+        SET_EXPECT(GetScriptDispatch);
+        SET_EXPECT(GetTypeInfo);
+        SET_EXPECT(GetTypeAttr);
+        SET_EXPECT(ReleaseTypeAttr);
+        hr = IScriptProcedureCollection_get_Count(procs, &count);
+        ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+        ok(count == ARRAY_SIZE(custom_engine_funcs), "count is not %u, got %d.\n", TypeInfo_GetTypeAttr_cFuncs, count);
+        CHECK_CALLED(GetScriptDispatch);
+        CHECK_CALLED(GetTypeInfo);
+        CHECK_CALLED(GetTypeAttr);
+        CHECK_CALLED(ReleaseTypeAttr);
+
+        /* Reset uncaches the objects, but not the count */
+        SET_EXPECT(SetScriptState_INITIALIZED);
+        IScriptControl_Reset(sc);
+        CHECK_CALLED(SetScriptState_INITIALIZED);
+        count = 0;
+        hr = IScriptProcedureCollection_get_Count(procs, &count);
+        ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+        ok(count == ARRAY_SIZE(custom_engine_funcs), "count is not %u, got %d.\n", TypeInfo_GetTypeAttr_cFuncs, count);
+
+        /* Try without ITypeComp interface */
+        SET_EXPECT(SetScriptState_STARTED);
+        SET_EXPECT(GetScriptDispatch);
+        SET_EXPECT(GetTypeInfo);
+        SET_EXPECT(QI_ITypeComp);
+        V_VT(&var) = VT_BSTR;
+        V_BSTR(&var) = SysAllocString(L"foobar");
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == E_NOINTERFACE, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+        ok(V_VT(&var) == VT_BSTR, "var type not BSTR, got %d.\n", V_VT(&var));
+        VariantClear(&var);
+        CHECK_CALLED(SetScriptState_STARTED);
+        CHECK_CALLED(GetScriptDispatch);
+        CHECK_CALLED(GetTypeInfo);
+        CHECK_CALLED(QI_ITypeComp);
+
+        count = 0;
+        hr = IScriptProcedureCollection_get_Count(procs, &count);
+        ok(hr == S_OK, "IScriptProcedureCollection_get_Count failed: 0x%08x.\n", hr);
+        ok(count == ARRAY_SIZE(custom_engine_funcs), "count is not %u, got %d.\n", TypeInfo_GetTypeAttr_cFuncs, count);
+
+        /* Make ITypeComp available */
+        TypeComp_available = TRUE;
+        SET_EXPECT(QI_ITypeComp);
+        SET_EXPECT(Bind);
+        V_VT(&var) = VT_BSTR;
+        V_BSTR(&var) = SysAllocString(L"type_mismatch");
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == TYPE_E_TYPEMISMATCH, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+        VariantClear(&var);
+        CHECK_CALLED(QI_ITypeComp);
+        CHECK_CALLED(Bind);
+        TypeComp_available = FALSE;
+
+        SET_EXPECT(Bind);
+        V_VT(&var) = VT_BSTR;
+        V_BSTR(&var) = SysAllocString(L"not_found");
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == CTL_E_ILLEGALFUNCTIONCALL, "IScriptProcedureCollection_get_Item failed: 0x%08x.\n", hr);
+        VariantClear(&var);
+        CHECK_CALLED(Bind);
+
+        SET_EXPECT(Bind);
+        SET_EXPECT(ReleaseVarDesc);
+        V_VT(&var) = VT_BSTR;
+        V_BSTR(&var) = SysAllocString(L"variable");
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == CTL_E_ILLEGALFUNCTIONCALL, "IScriptProcedureCollection_get_Item failed: 0x%08x.\n", hr);
+        VariantClear(&var);
+        CHECK_CALLED(Bind);
+        CHECK_CALLED(ReleaseVarDesc);
+
+        /* Index 0 and below are invalid (doesn't even call GetFuncDesc) */
+        V_VT(&var) = VT_I4;
+        V_I4(&var) = 0;
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == 0x800a0009, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+        V_I4(&var) = -1;
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == 0x800a0009, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+        SET_EXPECT(GetFuncDesc);
+        V_I4(&var) = 1337;
+        hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+        ok(hr == E_INVALIDARG, "IScriptProcedureCollection_get_Item returned: 0x%08x.\n", hr);
+        CHECK_CALLED(GetFuncDesc);
+
+        /* _NewEnum never caches the function count */
+        hr = IScriptProcedureCollection_get__NewEnum(procs, NULL);
+        ok(hr == E_POINTER, "IScriptProcedureCollection_get__NewEnum returned: 0x%08x.\n", hr);
+        SET_EXPECT(GetTypeAttr);
+        SET_EXPECT(ReleaseTypeAttr);
+        hr = IScriptProcedureCollection_get__NewEnum(procs, &unknown);
+        ok(hr == S_OK, "IScriptProcedureCollection_get__NewEnum failed: 0x%08x.\n", hr);
+        CHECK_CALLED(GetTypeAttr);
+        CHECK_CALLED(ReleaseTypeAttr);
+        hr = IUnknown_QueryInterface(unknown, &IID_IEnumVARIANT, (void**)&enumvar);
+        ok(hr == S_OK, "Failed to query for IEnumVARIANT: 0x%08x.\n", hr);
+        ok((char*)unknown == (char*)enumvar, "unknown and enumvar are not the same (%p vs %p).\n", unknown, enumvar);
+        IEnumVARIANT_Release(enumvar);
+        IUnknown_Release(unknown);
+        SET_EXPECT(GetTypeAttr);
+        SET_EXPECT(ReleaseTypeAttr);
+        hr = IScriptProcedureCollection_get__NewEnum(procs, &unknown);
+        ok(hr == S_OK, "IScriptProcedureCollection_get__NewEnum failed: 0x%08x.\n", hr);
+        CHECK_CALLED(GetTypeAttr);
+        CHECK_CALLED(ReleaseTypeAttr);
+        hr = IUnknown_QueryInterface(unknown, &IID_IEnumVARIANT, (void**)&enumvar);
+        ok(hr == S_OK, "Failed to query for IEnumVARIANT: 0x%08x.\n", hr);
+        IUnknown_Release(unknown);
+
+        fetched = 0xdeadbeef;
+        hr = IEnumVARIANT_Next(enumvar, 0, NULL, NULL);
+        ok(hr == E_POINTER, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Next(enumvar, 0, NULL, &fetched);
+        ok(hr == E_POINTER, "IEnumVARIANT_Next failed: 0x%08x.\n", hr);
+        ok(fetched == 0xdeadbeef, "got %u.\n", fetched);
+        hr = IEnumVARIANT_Next(enumvar, 0, &var, &fetched);
+        ok(hr == S_OK, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+        ok(fetched == 0, "got %u.\n", fetched);
+        hr = IEnumVARIANT_Next(enumvar, 0, &var, NULL);
+        ok(hr == S_OK, "IEnumVARIANT_Next returned: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Clone(enumvar, NULL);
+        ok(hr == E_POINTER, "IEnumVARIANT_Clone failed: 0x%08x.\n", hr);
+
+        for (i = 0; i < ARRAY_SIZE(custom_engine_funcs); i++)
+        {
+            /* Querying by index still goes through the Bind process */
+            SET_EXPECT(GetFuncDesc);
+            SET_EXPECT(GetNames);
+            SET_EXPECT(ReleaseFuncDesc);
+            V_VT(&var) = VT_R4;
+            V_R4(&var) = i + 1;
+            hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+            ok(hr == S_OK, "get_Item for index %u failed: 0x%08x.\n", i, hr);
+            CHECK_CALLED(GetFuncDesc);
+            CHECK_CALLED(GetNames);
+            CHECK_CALLED(ReleaseFuncDesc);
+
+            /* The name is cached and not looked up with Bind anymore */
+            V_VT(&var) = VT_BSTR;
+            V_BSTR(&var) = SysAllocString(custom_engine_funcs[i].name);
+            hr = IScriptProcedureCollection_get_Item(procs, var, &proc2);
+            ok(hr == S_OK, "get_Item for %s failed: 0x%08x.\n", wine_dbgstr_w(custom_engine_funcs[i].name), hr);
+            ok(proc == proc2, "proc and proc2 are not the same for %s and index %u.\n",
+                wine_dbgstr_w(custom_engine_funcs[i].name), i + 1);
+            IScriptProcedure_Release(proc);
+            IScriptProcedure_Release(proc2);
+
+            /* Since both were released, the cache entry is destroyed */
+            SET_EXPECT(Bind);
+            SET_EXPECT(GetNames);
+            SET_EXPECT(ReleaseFuncDesc);
+            hr = IScriptProcedureCollection_get_Item(procs, var, &proc);
+            ok(hr == S_OK, "get_Item for %s failed: 0x%08x.\n", wine_dbgstr_w(custom_engine_funcs[i].name), hr);
+            VariantClear(&var);
+            CHECK_CALLED(Bind);
+            CHECK_CALLED(GetNames);
+            CHECK_CALLED(ReleaseFuncDesc);
+
+            /* Compare with the enumerator */
+            SET_EXPECT(GetFuncDesc);
+            SET_EXPECT(GetNames);
+            SET_EXPECT(ReleaseFuncDesc);
+            hr = IEnumVARIANT_Next(enumvar, 1, &var, &fetched);
+            ok(hr == S_OK, "IEnumVARIANT_Next for index %u failed: 0x%08x.\n", i, hr);
+            ok(fetched == 1, "got %u.\n", fetched);
+            ok(V_VT(&var) == VT_DISPATCH, "V_VT(var) = %d.\n", V_VT(&var));
+            CHECK_CALLED(GetFuncDesc);
+            CHECK_CALLED(GetNames);
+            CHECK_CALLED(ReleaseFuncDesc);
+            hr = IDispatch_QueryInterface(V_DISPATCH(&var), &IID_IScriptProcedure, (void**)&proc2);
+            ok(hr == S_OK, "Failed to query IScriptProcedure for index %u: 0x%08x.\n", i, hr);
+            VariantClear(&var);
+
+            ok(proc == proc2, "proc and proc2 are not the same for %s and enum index %u.\n",
+                wine_dbgstr_w(custom_engine_funcs[i].name), i);
+            IScriptProcedure_Release(proc2);
+
+            /* Verify the properties */
+            hr = IScriptProcedure_get_Name(proc, &str);
+            ok(hr == S_OK, "get_Name for %s failed: 0x%08x.\n", wine_dbgstr_w(custom_engine_funcs[i].name), hr);
+            ok(!lstrcmpW(str, custom_engine_funcs[i].name), "Name is not %s, got %s.\n",
+                wine_dbgstr_w(custom_engine_funcs[i].name), wine_dbgstr_w(str));
+            SysFreeString(str);
+            hr = IScriptProcedure_get_NumArgs(proc, &count);
+            ok(hr == S_OK, "get_NumArgs for %s failed: 0x%08x.\n", wine_dbgstr_w(custom_engine_funcs[i].name), hr);
+            ok(count == custom_engine_funcs[i].num_args + custom_engine_funcs[i].num_opt_args,
+                "NumArgs is not %d, got %d.\n", custom_engine_funcs[i].num_args + custom_engine_funcs[i].num_opt_args, count);
+            hr = IScriptProcedure_get_HasReturnValue(proc, &vbool);
+            ok(hr == S_OK, "get_HasReturnValue for %s failed: 0x%08x.\n", wine_dbgstr_w(custom_engine_funcs[i].name), hr);
+            ok(vbool == ((custom_engine_funcs[i].ret_type == VT_VOID) ? VARIANT_FALSE : VARIANT_TRUE),
+                "get_HasReturnValue for %s returned %x.\n", wine_dbgstr_w(custom_engine_funcs[i].name), vbool);
+
+            IScriptProcedure_Release(proc);
+        }
+
+        hr = IEnumVARIANT_Next(enumvar, 1, &var, &fetched);
+        ok(hr == S_FALSE, "IEnumVARIANT_Next failed: 0x%08x.\n", hr);
+        ok(fetched == 0, "got %u.\n", fetched);
+        hr = IEnumVARIANT_Skip(enumvar, 0);
+        ok(hr == S_OK, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Skip(enumvar, 1);
+        ok(hr == S_FALSE, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Reset(enumvar);
+        ok(hr == S_OK, "IEnumVARIANT_Reset failed: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Skip(enumvar, ARRAY_SIZE(custom_engine_funcs) - 1);
+        ok(hr == S_OK, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Clone(enumvar, &enumvar2);
+        ok(hr == S_OK, "IEnumVARIANT_Clone failed: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Skip(enumvar2, 1);
+        ok(hr == S_OK, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+        hr = IEnumVARIANT_Skip(enumvar2, 1);
+        ok(hr == S_FALSE, "IEnumVARIANT_Skip failed: 0x%08x.\n", hr);
+
+        IEnumVARIANT_Release(enumvar2);
+        IEnumVARIANT_Release(enumvar);
+        IScriptProcedureCollection_Release(procs);
+        IActiveScriptSite_Release(site);
+
+        SET_EXPECT(Close);
+        IScriptControl_Release(sc);
+        CHECK_CALLED(Close);
+    }
+}
+
 START_TEST(msscript)
 {
     IUnknown *unk;
@@ -2987,7 +4107,9 @@ START_TEST(msscript)
     test_IScriptControl_ExecuteStatement();
     test_IScriptControl_Run();
     test_IScriptControl_get_Modules();
+    test_IScriptControl_get_Error();
     test_IScriptControl_get_CodeObject();
+    test_IScriptControl_get_Procedures();
 
     init_registry(FALSE);
 

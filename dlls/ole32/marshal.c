@@ -85,7 +85,7 @@ static inline struct proxy_manager *impl_from_IClientSecurity( IClientSecurity *
     return CONTAINING_RECORD(iface, struct proxy_manager, IClientSecurity_iface);
 }
 
-static HRESULT unmarshal_object(const STDOBJREF *stdobjref, APARTMENT *apt,
+static HRESULT unmarshal_object(const STDOBJREF *stdobjref, struct apartment *apt,
                                 MSHCTX dest_context, void *dest_context_data,
                                 REFIID riid, const OXID_INFO *oxid_info,
                                 void **object);
@@ -118,7 +118,7 @@ static inline HRESULT get_facbuf_for_iid(REFIID riid, IPSFactoryBuffer **facbuf)
 }
 
 /* marshals an object into a STDOBJREF structure */
-HRESULT marshal_object(APARTMENT *apt, STDOBJREF *stdobjref, REFIID riid, IUnknown *object,
+HRESULT marshal_object(struct apartment *apt, STDOBJREF *stdobjref, REFIID riid, IUnknown *object,
     DWORD dest_context, void *dest_context_data, MSHLFLAGS mshlflags)
 {
     struct stub_manager *manager;
@@ -310,7 +310,7 @@ static HRESULT WINAPI ClientIdentity_QueryMultipleInterfaces(IMultiQI *iface, UL
          * the interfaces were returned */
         if (SUCCEEDED(hr))
         {
-            APARTMENT *apt = apartment_get_current_or_mta();
+            struct apartment *apt = apartment_get_current_or_mta();
 
             /* try to unmarshal each object returned to us */
             for (i = 0; i < nonlocal_mqis; i++)
@@ -791,7 +791,7 @@ static void ifproxy_destroy(struct ifproxy * This)
 }
 
 static HRESULT proxy_manager_construct(
-    APARTMENT * apt, ULONG sorflags, OXID oxid, OID oid,
+    struct apartment * apt, ULONG sorflags, OXID oxid, OID oid,
     const OXID_INFO *oxid_info, struct proxy_manager ** proxy_manager)
 {
     struct proxy_manager * This = HeapAlloc(GetProcessHeap(), 0, sizeof(*This));
@@ -1197,7 +1197,7 @@ static void proxy_manager_destroy(struct proxy_manager * This)
 /* finds the proxy manager corresponding to a given OXID and OID that has
  * been unmarshaled in the specified apartment. The caller must release the
  * reference to the proxy_manager when the object is no longer used. */
-static BOOL find_proxy_manager(APARTMENT * apt, OXID oxid, OID oid, struct proxy_manager ** proxy_found)
+static BOOL find_proxy_manager(struct apartment * apt, OXID oxid, OID oid, struct proxy_manager ** proxy_found)
 {
     BOOL found = FALSE;
     struct list * cursor;
@@ -1223,7 +1223,7 @@ static BOOL find_proxy_manager(APARTMENT * apt, OXID oxid, OID oid, struct proxy
     return found;
 }
 
-HRESULT apartment_disconnectproxies(struct apartment *apt)
+HRESULT WINAPI Internal_apartment_disconnectproxies(struct apartment *apt)
 {
     struct list * cursor;
 
@@ -1306,7 +1306,7 @@ StdMarshalImpl_MarshalInterface(
 {
     ULONG                 res;
     HRESULT               hres;
-    APARTMENT *apt;
+    struct apartment *apt;
     OBJREF objref;
 
     TRACE("(...,%s,...)\n", debugstr_guid(riid));
@@ -1337,7 +1337,7 @@ StdMarshalImpl_MarshalInterface(
 /* helper for StdMarshalImpl_UnmarshalInterface - does the unmarshaling with
  * no questions asked about the rules surrounding same-apartment unmarshals
  * and table marshaling */
-static HRESULT unmarshal_object(const STDOBJREF *stdobjref, APARTMENT *apt,
+static HRESULT unmarshal_object(const STDOBJREF *stdobjref, struct apartment *apt,
                                 MSHCTX dest_context, void *dest_context_data,
                                 REFIID riid, const OXID_INFO *oxid_info,
                                 void **object)
@@ -1413,8 +1413,7 @@ static HRESULT std_unmarshal_interface(MSHCTX dest_context, void *dest_context_d
     struct OR_STANDARD obj;
     ULONG res;
     HRESULT hres;
-    APARTMENT *apt;
-    APARTMENT *stub_apt;
+    struct apartment *apt, *stub_apt;
     OXID oxid;
 
     TRACE("(...,%s,....)\n", debugstr_guid(riid));
@@ -1469,7 +1468,7 @@ static HRESULT std_unmarshal_interface(MSHCTX dest_context, void *dest_context_d
      * ignore table marshaling and normal marshaling rules regarding number of
      * unmarshals, etc, but if you abuse these rules then your proxy could end
      * up returning RPC_E_DISCONNECTED. */
-    if ((stub_apt = apartment_findfromoxid(obj.std.oxid, TRUE)))
+    if ((stub_apt = apartment_findfromoxid(obj.std.oxid)))
     {
         if ((stubmgr = get_stub_manager(stub_apt, obj.std.oid)))
         {
@@ -1540,7 +1539,7 @@ static HRESULT std_release_marshal_data(IStream *pStm)
     ULONG                res;
     HRESULT              hres;
     struct stub_manager *stubmgr;
-    APARTMENT           *apt;
+    struct apartment    *apt;
 
     hres = IStream_Read(pStm, &obj, FIELD_OFFSET(struct OR_STANDARD, saResAddr.aStringArray), &res);
     if (hres != S_OK) return STG_E_READFAULT;
@@ -1556,7 +1555,7 @@ static HRESULT std_release_marshal_data(IStream *pStm)
         wine_dbgstr_longlong(obj.std.oid),
         wine_dbgstr_guid(&obj.std.ipid));
 
-    if (!(apt = apartment_findfromoxid(obj.std.oxid, TRUE)))
+    if (!(apt = apartment_findfromoxid(obj.std.oxid)))
     {
         WARN("Could not map OXID %s to apartment object\n",
             wine_dbgstr_longlong(obj.std.oxid));
@@ -1690,26 +1689,6 @@ HRESULT WINAPI CoGetStandardMarshal(REFIID riid, IUnknown *pUnk,
 }
 
 /***********************************************************************
- *		get_marshaler	[internal]
- *
- * Retrieves an IMarshal interface for an object.
- */
-static HRESULT get_marshaler(REFIID riid, IUnknown *pUnk, DWORD dwDestContext,
-                             void *pvDestContext, DWORD mshlFlags,
-                             LPMARSHAL *pMarshal)
-{
-    HRESULT hr;
-
-    if (!pUnk)
-        return E_POINTER;
-    hr = IUnknown_QueryInterface(pUnk, &IID_IMarshal, (LPVOID*)pMarshal);
-    if (hr != S_OK)
-        hr = CoGetStandardMarshal(riid, pUnk, dwDestContext, pvDestContext,
-                                  mshlFlags, pMarshal);
-    return hr;
-}
-
-/***********************************************************************
  *		get_unmarshaler_from_stream	[internal]
  *
  * Creates an IMarshal* object according to the data marshaled to the stream.
@@ -1774,187 +1753,6 @@ static HRESULT get_unmarshaler_from_stream(IStream *stream, IMarshal **marshal, 
     if (hr != S_OK)
         ERR("Failed to create marshal, 0x%08x\n", hr);
 
-    return hr;
-}
-
-/***********************************************************************
- *		CoGetMarshalSizeMax	[OLE32.@]
- *
- * Gets the maximum amount of data that will be needed by a marshal.
- *
- * PARAMS
- *  pulSize       [O] Address where maximum marshal size will be stored.
- *  riid          [I] Identifier of the interface to marshal.
- *  pUnk          [I] Pointer to the object to marshal.
- *  dwDestContext [I] Destination. Used to enable or disable optimizations.
- *  pvDestContext [I] Reserved. Must be NULL.
- *  mshlFlags     [I] Flags that affect the marshaling. See CoMarshalInterface().
- *
- * RETURNS
- *  Success: S_OK.
- *  Failure: HRESULT code.
- *
- * SEE ALSO
- *  CoMarshalInterface().
- */
-HRESULT WINAPI CoGetMarshalSizeMax(ULONG *pulSize, REFIID riid, IUnknown *pUnk,
-                                   DWORD dwDestContext, void *pvDestContext,
-                                   DWORD mshlFlags)
-{
-    HRESULT hr;
-    LPMARSHAL pMarshal;
-    BOOL std_marshal = FALSE;
-
-    if(!pUnk)
-        return E_POINTER;
-
-    hr = IUnknown_QueryInterface(pUnk, &IID_IMarshal, (void**)&pMarshal);
-    if (hr != S_OK)
-    {
-        std_marshal = TRUE;
-        hr = CoGetStandardMarshal(riid, pUnk, dwDestContext, pvDestContext,
-                                  mshlFlags, &pMarshal);
-    }
-    if (hr != S_OK)
-        return hr;
-
-    hr = IMarshal_GetMarshalSizeMax(pMarshal, riid, pUnk, dwDestContext,
-                                    pvDestContext, mshlFlags, pulSize);
-    if (!std_marshal)
-        /* add on the size of the whole OBJREF structure like native does */
-        *pulSize += sizeof(OBJREF);
-
-    IMarshal_Release(pMarshal);
-    return hr;
-}
-
-
-static void dump_MSHLFLAGS(MSHLFLAGS flags)
-{
-    if (flags & MSHLFLAGS_TABLESTRONG)
-        TRACE(" MSHLFLAGS_TABLESTRONG");
-    if (flags & MSHLFLAGS_TABLEWEAK)
-        TRACE(" MSHLFLAGS_TABLEWEAK");
-    if (!(flags & (MSHLFLAGS_TABLESTRONG|MSHLFLAGS_TABLEWEAK)))
-        TRACE(" MSHLFLAGS_NORMAL");
-    if (flags & MSHLFLAGS_NOPING)
-        TRACE(" MSHLFLAGS_NOPING");
-}
-
-/***********************************************************************
- *		CoMarshalInterface	[OLE32.@]
- *
- * Marshals an interface into a stream so that the object can then be
- * unmarshaled from another COM apartment and used remotely.
- *
- * PARAMS
- *  pStream       [I] Stream the object will be marshaled into.
- *  riid          [I] Identifier of the interface to marshal.
- *  pUnk          [I] Pointer to the object to marshal.
- *  dwDestContext [I] Destination. Used to enable or disable optimizations.
- *  pvDestContext [I] Reserved. Must be NULL.
- *  mshlFlags     [I] Flags that affect the marshaling. See notes.
- *
- * RETURNS
- *  Success: S_OK.
- *  Failure: HRESULT code.
- *
- * NOTES
- *
- * The mshlFlags parameter can take one or more of the following flags:
- *| MSHLFLAGS_NORMAL - Unmarshal once, releases stub on last proxy release.
- *| MSHLFLAGS_TABLESTRONG - Unmarshal many, release when CoReleaseMarshalData() called.
- *| MSHLFLAGS_TABLEWEAK - Unmarshal many, releases stub on last proxy release.
- *| MSHLFLAGS_NOPING - No automatic garbage collection (and so reduces network traffic).
- *
- * If a marshaled object is not unmarshaled, then CoReleaseMarshalData() must
- * be called in order to release the resources used in the marshaling.
- *
- * SEE ALSO
- *  CoUnmarshalInterface(), CoReleaseMarshalData().
- */
-HRESULT WINAPI CoMarshalInterface(IStream *pStream, REFIID riid, IUnknown *pUnk,
-                                  DWORD dwDestContext, void *pvDestContext,
-                                  DWORD mshlFlags)
-{
-    HRESULT	hr;
-    CLSID marshaler_clsid;
-    LPMARSHAL pMarshal;
-
-    TRACE("(%p, %s, %p, %x, %p, ", pStream, debugstr_guid(riid), pUnk,
-        dwDestContext, pvDestContext);
-    dump_MSHLFLAGS(mshlFlags);
-    TRACE(")\n");
-
-    if (!pUnk || !pStream)
-        return E_INVALIDARG;
-
-    /* get the marshaler for the specified interface */
-    hr = get_marshaler(riid, pUnk, dwDestContext, pvDestContext, mshlFlags, &pMarshal);
-    if (hr != S_OK)
-    {
-        ERR("Failed to get marshaller, 0x%08x\n", hr);
-        return hr;
-    }
-
-    hr = IMarshal_GetUnmarshalClass(pMarshal, riid, pUnk, dwDestContext,
-                                    pvDestContext, mshlFlags, &marshaler_clsid);
-    if (hr != S_OK)
-    {
-        ERR("IMarshal::GetUnmarshalClass failed, 0x%08x\n", hr);
-        goto cleanup;
-    }
-
-    /* FIXME: implement handler marshaling too */
-    if (IsEqualCLSID(&marshaler_clsid, &CLSID_StdMarshal))
-    {
-        TRACE("Using standard marshaling\n");
-    }
-    else
-    {
-        OBJREF objref;
-
-        TRACE("Using custom marshaling\n");
-        objref.signature = OBJREF_SIGNATURE;
-        objref.iid = *riid;
-        objref.flags = OBJREF_CUSTOM;
-        objref.u_objref.u_custom.clsid = marshaler_clsid;
-        objref.u_objref.u_custom.cbExtension = 0;
-        objref.u_objref.u_custom.size = 0;
-        hr = IMarshal_GetMarshalSizeMax(pMarshal, riid, pUnk, dwDestContext,
-                                        pvDestContext, mshlFlags,
-                                        &objref.u_objref.u_custom.size);
-        if (hr != S_OK)
-        {
-            ERR("Failed to get max size of marshal data, error 0x%08x\n", hr);
-            goto cleanup;
-        }
-        /* write constant sized common header and OR_CUSTOM data into stream */
-        hr = IStream_Write(pStream, &objref,
-                          FIELD_OFFSET(OBJREF, u_objref.u_custom.pData), NULL);
-        if (hr != S_OK)
-        {
-            ERR("Failed to write OR_CUSTOM header to stream with 0x%08x\n", hr);
-            goto cleanup;
-        }
-    }
-
-    TRACE("Calling IMarshal::MarshalInterface\n");
-    /* call helper object to do the actual marshaling */
-    hr = IMarshal_MarshalInterface(pMarshal, pStream, riid, pUnk, dwDestContext,
-                                   pvDestContext, mshlFlags);
-
-    if (hr != S_OK)
-    {
-        ERR("Failed to marshal the interface %s, %x\n", debugstr_guid(riid), hr);
-        goto cleanup;
-    }
-
-cleanup:
-    IMarshal_Release(pMarshal);
-
-    TRACE("completed with hr 0x%08x\n", hr);
-    
     return hr;
 }
 
