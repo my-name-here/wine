@@ -99,7 +99,6 @@ extern obj_handle_t lock_fd( struct fd *fd, file_pos_t offset, file_pos_t count,
 extern void unlock_fd( struct fd *fd, file_pos_t offset, file_pos_t count );
 extern void allow_fd_caching( struct fd *fd );
 extern void set_fd_signaled( struct fd *fd, int signaled );
-extern int is_fd_signaled( struct fd *fd );
 extern char *dup_fd_name( struct fd *root, const char *name );
 
 extern int default_fd_signaled( struct object *obj, struct wait_queue_entry *entry );
@@ -177,11 +176,16 @@ extern struct object *create_user_data_mapping( struct object *root, const struc
 
 /* device functions */
 
-extern struct object *create_named_pipe_device( struct object *root, const struct unicode_str *name );
-extern struct object *create_mailslot_device( struct object *root, const struct unicode_str *name );
-extern struct object *create_console_device( struct object *root, const struct unicode_str *name );
+extern struct object *create_named_pipe_device( struct object *root, const struct unicode_str *name,
+                                                unsigned int attr, const struct security_descriptor *sd );
+extern struct object *create_mailslot_device( struct object *root, const struct unicode_str *name,
+                                              unsigned int attr, const struct security_descriptor *sd );
+extern struct object *create_console_device( struct object *root, const struct unicode_str *name,
+                                              unsigned int attr, const struct security_descriptor *sd );
+extern struct object *create_socket_device( struct object *root, const struct unicode_str *name,
+                                              unsigned int attr, const struct security_descriptor *sd );
 extern struct object *create_unix_device( struct object *root, const struct unicode_str *name,
-                                          const char *unix_path );
+                                          unsigned int attr, const struct security_descriptor *sd, const char *unix_path );
 
 /* change notification functions */
 

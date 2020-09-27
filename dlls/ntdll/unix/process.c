@@ -474,14 +474,39 @@ static ULONG get_env_size( const RTL_USER_PROCESS_PARAMETERS *params, char **win
 
 
 /***********************************************************************
+ *           get_nt_pathname
+ *
+ * Simplified version of RtlDosPathNameToNtPathName_U.
+ */
+static WCHAR *get_nt_pathname( const UNICODE_STRING *str )
+{
+    static const WCHAR ntprefixW[] = {'\\','?','?','\\',0};
+    static const WCHAR uncprefixW[] = {'U','N','C','\\',0};
+    const WCHAR *name = str->Buffer;
+    WCHAR *ret;
+
+    if (!(ret = malloc( str->Length + 8 * sizeof(WCHAR) ))) return NULL;
+
+    wcscpy( ret, ntprefixW );
+    if (name[0] == '\\' && name[1] == '\\')
+    {
+        if ((name[2] == '.' || name[2] == '?') && name[3] == '\\') name += 4;
+        else
+        {
+            wcscat( ret, uncprefixW );
+            name += 2;
+        }
+    }
+    wcscat( ret, name );
+    return ret;
+}
+
+
+/***********************************************************************
  *           get_unix_curdir
  */
 static int get_unix_curdir( const RTL_USER_PROCESS_PARAMETERS *params )
 {
-    static const WCHAR ntprefixW[] = {'\\','?','?','\\',0};
-    static const WCHAR uncprefixW[] = {'U','N','C','\\',0};
-    const UNICODE_STRING *curdir = &params->CurrentDirectory.DosPath;
-    const WCHAR *dir = curdir->Buffer;
     UNICODE_STRING nt_name;
     OBJECT_ATTRIBUTES attr;
     IO_STATUS_BLOCK io;
@@ -489,20 +514,7 @@ static int get_unix_curdir( const RTL_USER_PROCESS_PARAMETERS *params )
     HANDLE handle;
     int fd = -1;
 
-    if (!(nt_name.Buffer = malloc( curdir->Length + 8 * sizeof(WCHAR) ))) return -1;
-
-    /* simplified version of RtlDosPathNameToNtPathName_U */
-    wcscpy( nt_name.Buffer, ntprefixW );
-    if (dir[0] == '\\' && dir[1] == '\\')
-    {
-        if ((dir[2] == '.' || dir[2] == '?') && dir[3] == '\\') dir += 4;
-        else
-        {
-            wcscat( nt_name.Buffer, uncprefixW );
-            dir += 2;
-        }
-    }
-    wcscat( nt_name.Buffer, dir );
+    if (!(nt_name.Buffer = get_nt_pathname( &params->CurrentDirectory.DosPath ))) return -1;
     nt_name.Length = wcslen( nt_name.Buffer ) * sizeof(WCHAR);
 
     InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
@@ -601,14 +613,15 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
 /***********************************************************************
  *           exec_process
  */
-NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTSTATUS status )
+void DECLSPEC_NORETURN exec_process( NTSTATUS status )
 {
+    RTL_USER_PROCESS_PARAMETERS *params = NtCurrentTeb()->Peb->ProcessParameters;
     pe_image_info_t pe_info;
     int unixdir, socketfd[2];
     char **argv;
     HANDLE handle;
 
-    if (startup_info_size) return status;  /* started from another Win32 process */
+    if (startup_info_size) goto done;  /* started from another Win32 process */
 
     switch (status)
     {
@@ -616,9 +629,14 @@ NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTST
     case STATUS_NO_MEMORY:
     case STATUS_INVALID_IMAGE_FORMAT:
     case STATUS_INVALID_IMAGE_NOT_MZ:
-        if (getenv( "WINEPRELOADRESERVE" )) return status;
-        if ((status = get_pe_file_info( path, &handle, &pe_info ))) return status;
+    {
+        UNICODE_STRING image;
+        if (getenv( "WINEPRELOADRESERVE" )) goto done;
+        image.Buffer = get_nt_pathname( &params->ImagePathName );
+        image.Length = wcslen( image.Buffer ) * sizeof(WCHAR);
+        if ((status = get_pe_file_info( &image, &handle, &pe_info ))) goto done;
         break;
+    }
     case STATUS_INVALID_IMAGE_WIN_16:
     case STATUS_INVALID_IMAGE_NE_FORMAT:
     case STATUS_INVALID_IMAGE_PROTECT:
@@ -627,12 +645,16 @@ NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTST
         pe_info.cpu = CPU_x86;
         break;
     default:
-        return status;
+        goto done;
     }
 
-    unixdir = get_unix_curdir( NtCurrentTeb()->Peb->ProcessParameters );
+    unixdir = get_unix_curdir( params );
 
-    if (socketpair( PF_UNIX, SOCK_STREAM, 0, socketfd ) == -1) return STATUS_TOO_MANY_OPENED_FILES;
+    if (socketpair( PF_UNIX, SOCK_STREAM, 0, socketfd ) == -1)
+    {
+        status = STATUS_TOO_MANY_OPENED_FILES;
+        goto done;
+    }
 #ifdef SO_PASSCRED
     else
     {
@@ -653,7 +675,11 @@ NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTST
 
     if (!status)
     {
-        if (!(argv = build_argv( cmdline, 2 ))) return STATUS_NO_MEMORY;
+        if (!(argv = build_argv( &params->CommandLine, 2 )))
+        {
+            status = STATUS_NO_MEMORY;
+            goto done;
+        }
         fchdir( unixdir );
         do
         {
@@ -667,7 +693,19 @@ NTSTATUS CDECL exec_process( UNICODE_STRING *path, UNICODE_STRING *cmdline, NTST
         free( argv );
     }
     close( socketfd[0] );
-    return status;
+
+done:
+    switch (status)
+    {
+    case STATUS_INVALID_IMAGE_FORMAT:
+    case STATUS_INVALID_IMAGE_NOT_MZ:
+        ERR( "%s not supported on this system\n", debugstr_us(&params->ImagePathName) );
+        break;
+    default:
+        ERR( "failed to load %s error %x\n", debugstr_us(&params->ImagePathName), status );
+        break;
+    }
+    for (;;) NtTerminateProcess( GetCurrentProcess(), status );
 }
 
 
@@ -774,6 +812,28 @@ done:
     return status;
 }
 
+static NTSTATUS alloc_handle_list( const PS_ATTRIBUTE *handles_attr, obj_handle_t **handles, data_size_t *handles_len )
+{
+    SIZE_T count, i;
+    HANDLE *src;
+
+    *handles = NULL;
+    *handles_len = 0;
+
+    if (!handles_attr) return STATUS_SUCCESS;
+
+    count = handles_attr->Size / sizeof(HANDLE);
+
+    if (!(*handles = calloc( sizeof(**handles), count ))) return STATUS_NO_MEMORY;
+
+    src = handles_attr->ValuePtr;
+    for (i = 0; i < count; ++i)
+        (*handles)[i] = wine_server_obj_handle( src[i] );
+
+    *handles_len = count * sizeof(**handles);
+
+    return STATUS_SUCCESS;
+}
 
 /**********************************************************************
  *           NtCreateUserProcess  (NTDLL.@)
@@ -799,6 +859,9 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
     HANDLE parent = 0, debug = 0, token = 0;
     UNICODE_STRING path = {0};
     SIZE_T i, attr_count = (attr->TotalLength - sizeof(attr->TotalLength)) / sizeof(PS_ATTRIBUTE);
+    const PS_ATTRIBUTE *handles_attr = NULL;
+    data_size_t handles_size;
+    obj_handle_t *handles;
 
     for (i = 0; i < attr_count; i++)
     {
@@ -817,6 +880,10 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
         case PS_ATTRIBUTE_TOKEN:
             token = attr->Attributes[i].ValuePtr;
             break;
+        case PS_ATTRIBUTE_HANDLE_LIST:
+            if (process_flags & PROCESS_CREATE_FLAGS_INHERIT_HANDLES)
+                handles_attr = &attr->Attributes[i];
+            break;
         default:
             if (attr->Attributes[i].Attribute & PS_ATTRIBUTE_INPUT)
                 FIXME( "unhandled input attribute %lx\n", attr->Attributes[i].Attribute );
@@ -827,7 +894,6 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
     TRACE( "%s image %s cmdline %s parent %p\n", debugstr_us( &path ),
            debugstr_us( &params->ImagePathName ), debugstr_us( &params->CommandLine ), parent );
     if (debug) FIXME( "debug port %p not supported yet\n", debug );
-    if (token) FIXME( "token %p not supported yet\n", token );
 
     unixdir = get_unix_curdir( params );
 
@@ -845,12 +911,19 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
 
     if ((status = alloc_object_attributes( process_attr, &objattr, &attr_len ))) goto done;
 
+    if ((status = alloc_handle_list( handles_attr, &handles, &handles_size )))
+    {
+        free( objattr );
+        goto done;
+    }
+
     /* create the socket for the new process */
 
     if (socketpair( PF_UNIX, SOCK_STREAM, 0, socketfd ) == -1)
     {
         status = STATUS_TOO_MANY_OPENED_FILES;
         free( objattr );
+        free( handles );
         goto done;
     }
 #ifdef SO_PASSCRED
@@ -868,6 +941,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
 
     SERVER_START_REQ( new_process )
     {
+        req->token          = wine_server_obj_handle( token );
         req->parent_process = wine_server_obj_handle( parent );
         req->inherit_all    = !!(process_flags & PROCESS_CREATE_FLAGS_INHERIT_HANDLES);
         req->create_flags   = params->DebugFlags; /* hack: creation flags stored in DebugFlags for now */
@@ -876,7 +950,9 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
         req->access         = process_access;
         req->cpu            = pe_info.cpu;
         req->info_size      = startup_info_size;
+        req->handles_size   = handles_size;
         wine_server_add_data( req, objattr, attr_len );
+        wine_server_add_data( req, handles, handles_size );
         wine_server_add_data( req, startup_info, startup_info_size );
         wine_server_add_data( req, params->Environment, env_size );
         if (!(status = wine_server_call( req )))
@@ -888,6 +964,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
     }
     SERVER_END_REQ;
     free( objattr );
+    free( handles );
 
     if (status)
     {
@@ -1004,7 +1081,6 @@ done:
  */
 NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
 {
-    static BOOL clean_exit;
     NTSTATUS ret;
     BOOL self;
 
@@ -1018,8 +1094,8 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
     SERVER_END_REQ;
     if (self)
     {
-        if (!handle) clean_exit = TRUE;
-        else if (clean_exit) exit_process( exit_code );
+        if (!handle) process_exiting = TRUE;
+        else if (process_exiting) exit_process( exit_code );
         else abort_process( exit_code );
     }
     return ret;

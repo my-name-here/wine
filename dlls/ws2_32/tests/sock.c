@@ -86,6 +86,7 @@ static int   (WINAPI *pWSAEnumNameSpaceProvidersA)(LPDWORD,LPWSANAMESPACE_INFOA)
 static int   (WINAPI *pWSAEnumNameSpaceProvidersW)(LPDWORD,LPWSANAMESPACE_INFOW);
 static int   (WINAPI *pWSAPoll)(WSAPOLLFD *,ULONG,INT);
 static int   (WINAPI *pWSCGetProviderInfo)(LPGUID,WSC_PROVIDER_INFO_TYPE,PBYTE,size_t*,DWORD,LPINT);
+static int   (WINAPI *pWSCGetProviderPath)(LPGUID, LPWSTR, LPINT, LPINT);
 
 /* Function pointers from iphlpapi */
 static DWORD (WINAPI *pGetAdaptersInfo)(PIP_ADAPTER_INFO,PULONG);
@@ -1220,7 +1221,6 @@ static void test_WithWSAStartup(void)
     ok(res == 0, "WSAStartup() failed unexpectedly: %d\n", res);
 
     /* show that sockets are destroyed automatically after WSACleanup */
-    todo_wine {
     SetLastError(0xdeadbeef);
     res = send(pairs[0].src, "TEST", 4, 0);
     error = WSAGetLastError();
@@ -1255,8 +1255,6 @@ static void test_WithWSAStartup(void)
             if (res == SOCKET_ERROR)
                 ok(error == WSAENOTSOCK, "Test[%d]: expected 10038, got %d\n", i, error);
         }
-    }
-
     }
 
     /* While wine is not fixed, close all sockets manually */
@@ -1303,6 +1301,7 @@ static void Init (void)
     pWSAEnumNameSpaceProvidersW = (void *)GetProcAddress(hws2_32, "WSAEnumNameSpaceProvidersW");
     pWSAPoll = (void *)GetProcAddress(hws2_32, "WSAPoll");
     pWSCGetProviderInfo = (void *)GetProcAddress(hws2_32, "WSCGetProviderInfo");
+    pWSCGetProviderPath = (void *)GetProcAddress(hws2_32, "WSCGetProviderPath");
 
     hiphlpapi = LoadLibraryA("iphlpapi.dll");
     if (hiphlpapi)
@@ -2472,107 +2471,78 @@ static void test_WSASocket(void)
     int items, err, size, socktype, i, j;
     UINT pi_size;
 
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, 0, 0, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEINVAL, "Expected 10022, received %d\n", err);
+    static const struct
+    {
+        int family, type, protocol;
+        DWORD error;
+        int ret_family, ret_type, ret_protocol;
+    }
+    tests[] =
+    {
+        /* 0 */
+        {0xdead,    SOCK_STREAM, IPPROTO_TCP, WSAEAFNOSUPPORT},
+        {-1,        SOCK_STREAM, IPPROTO_TCP, WSAEAFNOSUPPORT},
+        {AF_INET,   0xdead,      IPPROTO_TCP, WSAESOCKTNOSUPPORT},
+        {AF_INET,   -1,          IPPROTO_TCP, WSAESOCKTNOSUPPORT},
+        {AF_INET,   SOCK_STREAM, 0xdead,      WSAEPROTONOSUPPORT},
+        {AF_INET,   SOCK_STREAM, -1,          WSAEPROTONOSUPPORT},
+        {0xdead,    0xdead,      IPPROTO_TCP, WSAESOCKTNOSUPPORT},
+        {0xdead,    SOCK_STREAM, 0xdead,      WSAEAFNOSUPPORT},
+        {AF_INET,   0xdead,      0xdead,      WSAESOCKTNOSUPPORT},
+        {0xdead,    SOCK_STREAM, IPPROTO_UDP, WSAEAFNOSUPPORT},
 
-    sock = WSASocketA(AF_INET, 0, 0, NULL, 0, 0);
-    ok(sock != INVALID_SOCKET, "WSASocketA should have succeeded\n");
-    closesocket(sock);
+        /* 10 */
+        {AF_INET,   SOCK_STREAM, 0,           0, AF_INET, SOCK_STREAM, IPPROTO_TCP},
+        {AF_INET,   SOCK_DGRAM,  0,           0, AF_INET, SOCK_DGRAM,  IPPROTO_UDP},
+        {AF_INET,   0xdead,      0,           WSAESOCKTNOSUPPORT},
+        {AF_INET,   0,           IPPROTO_TCP, 0, AF_INET, SOCK_STREAM, IPPROTO_TCP},
+        {AF_INET,   0,           IPPROTO_UDP, 0, AF_INET, SOCK_DGRAM,  IPPROTO_UDP},
+        {AF_INET,   0,           0xdead,      WSAEPROTONOSUPPORT},
+        {AF_INET,   0,           0,           0, AF_INET, SOCK_STREAM, IPPROTO_TCP},
+        {AF_INET,   SOCK_STREAM, IPPROTO_UDP, WSAEPROTONOSUPPORT},
+        {AF_INET,   SOCK_DGRAM,  IPPROTO_TCP, WSAEPROTONOSUPPORT},
 
-    sock = WSASocketA(AF_INET, SOCK_STREAM, 0, NULL, 0, 0);
-    ok(sock != INVALID_SOCKET, "WSASocketA should have succeeded\n");
-    closesocket(sock);
+        /* 19 */
+        {AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP, 0, AF_INET, SOCK_STREAM, IPPROTO_TCP},
+        {AF_UNSPEC, SOCK_STREAM, 0xdead,      WSAEPROTONOSUPPORT},
+        {AF_UNSPEC, 0xdead,      IPPROTO_UDP, WSAESOCKTNOSUPPORT},
+        {AF_UNSPEC, SOCK_STREAM, 0,           WSAEINVAL},
+        {AF_UNSPEC, SOCK_DGRAM,  0,           WSAEINVAL},
+        {AF_UNSPEC, 0xdead,      0,           WSAEINVAL},
+        {AF_UNSPEC, 0,           IPPROTO_TCP, 0, AF_INET, SOCK_STREAM, IPPROTO_TCP},
+        {AF_UNSPEC, 0,           IPPROTO_UDP, 0, AF_INET, SOCK_DGRAM,  IPPROTO_UDP},
+        {AF_UNSPEC, 0,           0xdead,      WSAEPROTONOSUPPORT},
+        {AF_UNSPEC, 0,           0,           WSAEINVAL},
+    };
 
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, SOCK_STREAM, -1, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEPROTONOSUPPORT, "Expected 10043, received %d\n", err);
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        SetLastError( 0xdeadbeef );
+        sock = WSASocketA( tests[i].family, tests[i].type, tests[i].protocol, NULL, 0, 0 );
+        todo_wine_if (!tests[i].error || i == 7)
+            ok(WSAGetLastError() == tests[i].error, "Test %u: got wrong error %u\n", i, WSAGetLastError());
+        if (tests[i].error)
+        {
+            ok(sock == INVALID_SOCKET, "Test %u: expected failure\n", i);
+        }
+        else
+        {
+            WSAPROTOCOL_INFOA info;
 
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, -1, IPPROTO_UDP, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAESOCKTNOSUPPORT, "Expected 10044, received %d\n", err);
+            todo_wine_if (i == 19) ok(sock != INVALID_SOCKET, "Text %u: expected success\n", i);
+            if (sock == INVALID_SOCKET) continue;
 
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, -1, 0, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEINVAL, "Expected 10022, received %d\n", err);
+            size = sizeof(info);
+            err = getsockopt( sock, SOL_SOCKET, SO_PROTOCOL_INFOA, (char *)&info, &size );
+            ok(!err, "Test %u: getsockopt failed, error %u\n", i, WSAGetLastError());
+            ok(info.iAddressFamily == tests[i].ret_family, "Test %u: got wrong family %d\n", i, info.iAddressFamily);
+            ok(info.iSocketType == tests[i].ret_type, "Test %u: got wrong type %d\n", i, info.iSocketType);
+            todo_wine_if (i == 10 || i == 11 || i == 16)
+                ok(info.iProtocol == tests[i].ret_protocol, "Test %u: got wrong protocol %d\n", i, info.iProtocol);
 
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(AF_INET, -1, 0, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAESOCKTNOSUPPORT, "Expected 10044, received %d\n", err);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(AF_INET, 0, -1, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEPROTONOSUPPORT, "Expected 10043, received %d\n", err);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, -1, -1, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAESOCKTNOSUPPORT, "Expected 10044, received %d\n", err);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(-1, SOCK_STREAM, IPPROTO_UDP, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEAFNOSUPPORT, "Expected 10047, received %d\n", err);
-
-    sock = WSASocketA(AF_INET, 0, IPPROTO_TCP, NULL, 0, 0);
-    ok(sock != INVALID_SOCKET, "WSASocketA should have succeeded\n");
-    closesocket(sock);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, SOCK_STREAM, 0, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEINVAL, "Expected 10022, received %d\n", err);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, 0, 0xdead, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEPROTONOSUPPORT, "Expected 10043, received %d\n", err);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(AF_INET, 0xdead, 0, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAESOCKTNOSUPPORT, "Expected 10044, received %d\n", err);
-
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(0, 0xdead, 0, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEINVAL, "Expected 10022, received %d\n", err);
-
-    sock = WSASocketA(0, 0, IPPROTO_TCP, NULL, 0, 0);
-    ok(sock != INVALID_SOCKET, "WSASocketA should have succeeded\n");
-    closesocket(sock);
-
-    /* SOCK_STREAM does not support IPPROTO_UDP */
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(AF_INET, SOCK_STREAM, IPPROTO_UDP, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEPROTONOSUPPORT, "Expected 10043, received %d\n", err);
-
-    /* SOCK_DGRAM does not support IPPROTO_TCP */
-    SetLastError(0xdeadbeef);
-    ok(WSASocketA(AF_INET, SOCK_DGRAM, IPPROTO_TCP, NULL, 0, 0) == INVALID_SOCKET,
-       "WSASocketA should have failed\n");
-    err = WSAGetLastError();
-    ok(err == WSAEPROTONOSUPPORT, "Expected 10043, received %d\n", err);
+            closesocket( sock );
+        }
+    }
 
     /* Set pi_size explicitly to a value below 2*sizeof(WSAPROTOCOL_INFOA)
      * to avoid a crash on win98.
@@ -11351,6 +11321,65 @@ static void test_WSCGetProviderInfo(void)
     ok(errcode == WSANO_RECOVERY, "got %d, expected WSANO_RECOVERY\n", errcode);
 }
 
+static void test_WSCGetProviderPath(void)
+{
+    GUID provider = {};
+    WCHAR buffer[256];
+    INT ret, err, len;
+
+    if (!pWSCGetProviderPath)
+    {
+        skip("WSCGetProviderPath is not available.\n");
+        return;
+    }
+
+    ret = pWSCGetProviderPath(NULL, NULL, NULL, NULL);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+
+    ret = pWSCGetProviderPath(&provider, NULL, NULL, NULL);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+
+    ret = pWSCGetProviderPath(NULL, buffer, NULL, NULL);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+
+    len = -1;
+    ret = pWSCGetProviderPath(NULL, NULL, &len, NULL);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+    ok(len == -1, "Got unexpected len %d.\n", len);
+
+    err = 0;
+    ret = pWSCGetProviderPath(NULL, NULL, NULL, &err);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+    ok(err == WSAEFAULT, "Got unexpected error %d.\n", err);
+
+    err = 0;
+    ret = pWSCGetProviderPath(&provider, NULL, NULL, &err);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+    ok(err == WSAEFAULT, "Got unexpected error %d.\n", err);
+
+    err = 0;
+    len = -1;
+    ret = pWSCGetProviderPath(&provider, NULL, &len, &err);
+    ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+    ok(err == WSAEINVAL, "Got unexpected error %d.\n", err);
+    ok(len == -1, "Got unexpected len %d.\n", len);
+
+    err = 0;
+    len = 256;
+    ret = pWSCGetProviderPath(&provider, NULL, &len, &err);
+    todo_wine ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+    todo_wine ok(err == WSAEINVAL, "Got unexpected error %d.\n", err);
+    ok(len == 256, "Got unexpected len %d.\n", len);
+
+    /* Valid pointers and length but invalid GUID */
+    err = 0;
+    len = 256;
+    ret = pWSCGetProviderPath(&provider, buffer, &len, &err);
+    todo_wine ok(ret == SOCKET_ERROR, "Got unexpected ret %d.\n", ret);
+    todo_wine ok(err == WSAEINVAL, "Got unexpected error %d.\n", err);
+    ok(len == 256, "Got unexpected len %d.\n", len);
+}
+
 START_TEST( sock )
 {
     int i;
@@ -11432,6 +11461,7 @@ START_TEST( sock )
     test_address_list_query();
 
     test_WSCGetProviderInfo();
+    test_WSCGetProviderPath();
 
     /* this is an io heavy test, do it at the end so the kernel doesn't start dropping packets */
     test_send();

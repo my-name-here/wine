@@ -85,7 +85,6 @@
 #define WIN32_NO_STATUS
 #include "windef.h"
 #include "winnt.h"
-#include "wine/library.h"
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "unix_private.h"
@@ -106,6 +105,7 @@ static const char *server_dir;
 
 unsigned int server_cpus = 0;
 BOOL is_wow64 = FALSE;
+BOOL process_exiting = FALSE;
 
 timeout_t server_start_time = 0;  /* time of server startup */
 
@@ -298,7 +298,7 @@ unsigned int CDECL wine_server_call( void *req_ptr )
 void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset )
 {
     pthread_sigmask( SIG_BLOCK, &server_block_set, sigset );
-    pthread_mutex_lock( mutex );
+    mutex_lock( mutex );
 }
 
 
@@ -307,7 +307,7 @@ void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigse
  */
 void server_leave_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset )
 {
-    pthread_mutex_unlock( mutex );
+    mutex_unlock( mutex );
     pthread_sigmask( SIG_SETMASK, sigset, NULL );
 }
 
@@ -647,7 +647,7 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
         pthread_sigmask( SIG_SETMASK, &old_set, NULL );
         if (mutex)
         {
-            pthread_mutex_unlock( mutex );
+            mutex_unlock( mutex );
             mutex = NULL;
         }
         if (ret != STATUS_PENDING) break;
@@ -914,8 +914,8 @@ static BOOL add_fd_to_cache( HANDLE handle, int fd, enum server_fd_type type,
         if (!entry) fd_cache[0] = fd_cache_initial_block;
         else
         {
-            void *ptr = wine_anon_mmap( NULL, FD_CACHE_BLOCK_SIZE * sizeof(union fd_cache_entry),
-                                        PROT_READ | PROT_WRITE, 0 );
+            void *ptr = anon_mmap_alloc( FD_CACHE_BLOCK_SIZE * sizeof(union fd_cache_entry),
+                                         PROT_READ | PROT_WRITE );
             if (ptr == MAP_FAILED) return FALSE;
             fd_cache[entry] = ptr;
         }
@@ -1453,7 +1453,7 @@ void server_init_process(void)
 /***********************************************************************
  *           server_init_process_done
  */
-void CDECL server_init_process_done( void *relay )
+void server_init_process_done(void)
 {
     PEB *peb = NtCurrentTeb()->Peb;
     IMAGE_NT_HEADERS *nt = get_exe_nt_header();
@@ -1486,7 +1486,7 @@ void CDECL server_init_process_done( void *relay )
     SERVER_END_REQ;
 
     assert( !status );
-    signal_start_thread( entry, peb, suspend, relay, pLdrInitializeThunk, NtCurrentTeb() );
+    signal_start_thread( entry, peb, suspend, pLdrInitializeThunk, NtCurrentTeb() );
 }
 
 

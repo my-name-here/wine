@@ -38,12 +38,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(process);
 
-static const BOOL is_win64 = (sizeof(void *) > sizeof(int));
-
-
-/*
- *	Process object
- */
 
 /******************************************************************************
  *  RtlGetCurrentPeb  [NTDLL.@]
@@ -54,53 +48,6 @@ PEB * WINAPI RtlGetCurrentPeb(void)
     return NtCurrentTeb()->Peb;
 }
 
-/***********************************************************************
- *           restart_process
- */
-NTSTATUS restart_process( RTL_USER_PROCESS_PARAMETERS *params, NTSTATUS status )
-{
-    static const WCHAR argsW[] = {'%','s','%','s',' ','-','-','a','p','p','-','n','a','m','e',' ','"','%','s','"',' ','%','s',0};
-    static const WCHAR winevdm[] = {'w','i','n','e','v','d','m','.','e','x','e',0};
-    static const WCHAR comW[] = {'.','c','o','m',0};
-    static const WCHAR pifW[] = {'.','p','i','f',0};
-
-    DWORD len;
-    WCHAR *p, *cmdline;
-    UNICODE_STRING pathW, cmdW;
-
-    /* check for .com or .pif extension */
-    if (status == STATUS_INVALID_IMAGE_NOT_MZ &&
-        (p = wcsrchr( params->ImagePathName.Buffer, '.' )) &&
-        (!wcsicmp( p, comW ) || !wcsicmp( p, pifW )))
-        status = STATUS_INVALID_IMAGE_WIN_16;
-
-    switch (status)
-    {
-    case STATUS_CONFLICTING_ADDRESSES:
-    case STATUS_NO_MEMORY:
-    case STATUS_INVALID_IMAGE_FORMAT:
-    case STATUS_INVALID_IMAGE_NOT_MZ:
-        if (!RtlDosPathNameToNtPathName_U( params->ImagePathName.Buffer, &pathW, NULL, NULL ))
-            return status;
-        status = unix_funcs->exec_process( &pathW, &params->CommandLine, status );
-        break;
-    case STATUS_INVALID_IMAGE_WIN_16:
-    case STATUS_INVALID_IMAGE_NE_FORMAT:
-    case STATUS_INVALID_IMAGE_PROTECT:
-        len = (wcslen(system_dir) + wcslen(winevdm) + 16 + wcslen(params->ImagePathName.Buffer) +
-               wcslen(params->CommandLine.Buffer));
-        if (!(cmdline = RtlAllocateHeap( GetProcessHeap(), 0, len * sizeof(WCHAR) )))
-            return STATUS_NO_MEMORY;
-        swprintf( cmdline, len, argsW, (is_win64 || is_wow64) ? syswow64_dir : system_dir,
-                  winevdm, params->ImagePathName.Buffer, params->CommandLine.Buffer );
-        RtlInitUnicodeString( &pathW, winevdm );
-        RtlInitUnicodeString( &cmdW, cmdline );
-        status = unix_funcs->exec_process( &pathW, &cmdW, status );
-        break;
-    }
-    return status;
-}
-
 
 /**********************************************************************
  *           RtlCreateUserProcess  (NTDLL.@)
@@ -109,12 +56,12 @@ NTSTATUS WINAPI RtlCreateUserProcess( UNICODE_STRING *path, ULONG attributes,
                                       RTL_USER_PROCESS_PARAMETERS *params,
                                       SECURITY_DESCRIPTOR *process_descr,
                                       SECURITY_DESCRIPTOR *thread_descr,
-                                      HANDLE parent, BOOLEAN inherit, HANDLE debug, HANDLE exception,
+                                      HANDLE parent, BOOLEAN inherit, HANDLE debug, HANDLE token,
                                       RTL_USER_PROCESS_INFORMATION *info )
 {
     OBJECT_ATTRIBUTES process_attr, thread_attr;
     PS_CREATE_INFO create_info;
-    ULONG_PTR buffer[offsetof( PS_ATTRIBUTE_LIST, Attributes[5] ) / sizeof(ULONG_PTR)];
+    ULONG_PTR buffer[offsetof( PS_ATTRIBUTE_LIST, Attributes[6] ) / sizeof(ULONG_PTR)];
     PS_ATTRIBUTE_LIST *attr = (PS_ATTRIBUTE_LIST *)buffer;
     UINT pos = 0;
 
@@ -148,6 +95,14 @@ NTSTATUS WINAPI RtlCreateUserProcess( UNICODE_STRING *path, ULONG attributes,
         attr->Attributes[pos].Attribute    = PS_ATTRIBUTE_DEBUG_PORT;
         attr->Attributes[pos].Size         = sizeof(debug);
         attr->Attributes[pos].ValuePtr     = debug;
+        attr->Attributes[pos].ReturnLength = NULL;
+        pos++;
+    }
+    if (token)
+    {
+        attr->Attributes[pos].Attribute    = PS_ATTRIBUTE_TOKEN;
+        attr->Attributes[pos].Size         = sizeof(token);
+        attr->Attributes[pos].ValuePtr     = token;
         attr->Attributes[pos].ReturnLength = NULL;
         pos++;
     }

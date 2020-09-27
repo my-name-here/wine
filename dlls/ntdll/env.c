@@ -1250,11 +1250,11 @@ void init_user_process_params(void)
 
         params->Environment = env;
         NtCurrentTeb()->Peb->ProcessParameters = params;
+        RtlFreeUnicodeString( &initial_params.ImagePathName );
         RtlFreeUnicodeString( &cmdline );
         RtlReleasePath( load_path );
 
-        unix_funcs->get_initial_console( &params->ConsoleHandle, &params->hStdInput,
-                                         &params->hStdOutput, &params->hStdError );
+        unix_funcs->get_initial_console( params );
         params->wShowWindow = 1; /* SW_SHOWNORMAL */
 
         run_wineboot( &params->Environment );

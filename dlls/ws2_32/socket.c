@@ -155,6 +155,7 @@
 #define USE_WC_PREFIX   /* For CMSG_DATA */
 #include "iphlpapi.h"
 #include "ip2string.h"
+#include "wine/afd.h"
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "wine/exception.h"
@@ -267,26 +268,22 @@ static int WS2_recv_base( SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
                           LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine,
                           LPWSABUF lpControlBuffer );
 
-/* critical section to protect some non-reentrant net function */
-static CRITICAL_SECTION csWSgetXXXbyYYY;
-static CRITICAL_SECTION_DEBUG critsect_debug =
-{
-    0, 0, &csWSgetXXXbyYYY,
-    { &critsect_debug.ProcessLocksList, &critsect_debug.ProcessLocksList },
-      0, 0, { (DWORD_PTR)(__FILE__ ": csWSgetXXXbyYYY") }
-};
-static CRITICAL_SECTION csWSgetXXXbyYYY = { &critsect_debug, -1, 0, 0, 0, 0 };
+#define DECLARE_CRITICAL_SECTION(cs) \
+    static CRITICAL_SECTION cs; \
+    static CRITICAL_SECTION_DEBUG cs##_debug = \
+    { 0, 0, &cs, { &cs##_debug.ProcessLocksList, &cs##_debug.ProcessLocksList }, \
+      0, 0, { (DWORD_PTR)(__FILE__ ": " # cs) }}; \
+    static CRITICAL_SECTION cs = { &cs##_debug, -1, 0, 0, 0, 0 }
+
+DECLARE_CRITICAL_SECTION(csWSgetXXXbyYYY);
+DECLARE_CRITICAL_SECTION(cs_if_addr_cache);
+DECLARE_CRITICAL_SECTION(cs_socket_list);
 
 static in_addr_t *if_addr_cache;
 static unsigned int if_addr_cache_size;
-static CRITICAL_SECTION cs_if_addr_cache;
-static CRITICAL_SECTION_DEBUG cs_if_addr_cache_debug =
-{
-    0, 0, &cs_if_addr_cache,
-    { &cs_if_addr_cache_debug.ProcessLocksList, &cs_if_addr_cache_debug.ProcessLocksList },
-      0, 0, { (DWORD_PTR)(__FILE__ ": cs_if_addr_cache") }
-};
-static CRITICAL_SECTION cs_if_addr_cache = { &cs_if_addr_cache_debug, -1, 0, 0, 0, 0 };
+
+static SOCKET *socket_list;
+static unsigned int socket_list_size;
 
 union generic_unix_sockaddr
 {
@@ -480,6 +477,51 @@ static inline const char *debugstr_optval(const char *optval, int optlenval)
 /* HANDLE<->SOCKET conversion (SOCKET is UINT_PTR). */
 #define SOCKET2HANDLE(s) ((HANDLE)(s))
 #define HANDLE2SOCKET(h) ((SOCKET)(h))
+
+static BOOL socket_list_add(SOCKET socket)
+{
+    unsigned int i, new_size;
+    SOCKET *new_array;
+
+    EnterCriticalSection(&cs_socket_list);
+    for (i = 0; i < socket_list_size; ++i)
+    {
+        if (!socket_list[i])
+        {
+            socket_list[i] = socket;
+            LeaveCriticalSection(&cs_socket_list);
+            return TRUE;
+        }
+    }
+    new_size = max(socket_list_size * 2, 8);
+    if (!(new_array = heap_realloc(socket_list, new_size * sizeof(*socket_list))))
+    {
+        LeaveCriticalSection(&cs_socket_list);
+        return FALSE;
+    }
+    socket_list = new_array;
+    memset(socket_list + socket_list_size, 0, (new_size - socket_list_size) * sizeof(*socket_list));
+    socket_list[socket_list_size] = socket;
+    socket_list_size = new_size;
+    LeaveCriticalSection(&cs_socket_list);
+    return TRUE;
+}
+
+static void socket_list_remove(SOCKET socket)
+{
+    unsigned int i;
+
+    EnterCriticalSection(&cs_socket_list);
+    for (i = 0; i < socket_list_size; ++i)
+    {
+        if (socket_list[i] == socket)
+        {
+            socket_list[i] = 0;
+            break;
+        }
+    }
+    LeaveCriticalSection(&cs_socket_list);
+}
 
 /****************************************************************
  * Async IO declarations
@@ -788,6 +830,7 @@ static const int ws_aiflag_map[][2] =
 #ifdef  AI_V4MAPPED
     MAP_OPTION( AI_V4MAPPED ),
 #endif
+    MAP_OPTION( AI_ALL ),
     MAP_OPTION( AI_ADDRCONFIG ),
 };
 
@@ -1732,9 +1775,17 @@ int WINAPI WSAStartup(WORD wVersionRequested, LPWSADATA lpWSAData)
  */
 INT WINAPI WSACleanup(void)
 {
-    if (num_startup) {
-        num_startup--;
-        TRACE("pending cleanups: %d\n", num_startup);
+    TRACE("decreasing startup count from %d\n", num_startup);
+    if (num_startup)
+    {
+        if (!--num_startup)
+        {
+            unsigned int i;
+
+            for (i = 0; i < socket_list_size; ++i)
+                CloseHandle(SOCKET2HANDLE(socket_list[i]));
+            memset(socket_list, 0, socket_list_size * sizeof(*socket_list));
+        }
         return 0;
     }
     SetLastError(WSANOTINITIALISED);
@@ -2832,6 +2883,11 @@ SOCKET WINAPI WS_accept(SOCKET s, struct WS_sockaddr *addr, int *addrlen32)
         SERVER_END_REQ;
         if (!err)
         {
+            if (!socket_list_add(as))
+            {
+                CloseHandle(SOCKET2HANDLE(as));
+                return SOCKET_ERROR;
+            }
             if (addr && addrlen32 && WS_getpeername(as, addr, addrlen32))
             {
                 WS_closesocket(as);
@@ -3483,6 +3539,7 @@ int WINAPI WS_closesocket(SOCKET s)
         if (fd >= 0)
         {
             release_sock_fd(s, fd);
+            socket_list_remove(s);
             if (CloseHandle(SOCKET2HANDLE(s)))
                 res = 0;
         }
@@ -5107,6 +5164,10 @@ INT WINAPI WSAIoctl(SOCKET s, DWORD code, LPVOID in_buff, DWORD in_size, LPVOID 
     case 0x667e: /* Netscape tries hard to use bogus ioctl 0x667e */
         SetLastError(WSAEOPNOTSUPP);
         return SOCKET_ERROR;
+    case WS_SIO_ADDRESS_LIST_CHANGE:
+        code = IOCTL_AFD_ADDRESS_LIST_CHANGE;
+        status = WSAEOPNOTSUPP;
+        break;
     default:
         status = WSAEOPNOTSUPP;
         break;
@@ -7537,8 +7598,15 @@ SOCKET WINAPI WSASocketA(int af, int type, int protocol,
  */
 SOCKET WINAPI WSASocketW(int af, int type, int protocol,
                          LPWSAPROTOCOL_INFOW lpProtocolInfo,
-                         GROUP g, DWORD dwFlags)
+                         GROUP g, DWORD flags)
 {
+    static const WCHAR afdW[] = {'\\','D','e','v','i','c','e','\\','A','f','d',0};
+    struct afd_create_params create_params;
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING string;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    HANDLE handle;
     SOCKET ret;
     DWORD err;
     int unixaf, unixtype, ipxptype = -1;
@@ -7549,7 +7617,7 @@ SOCKET WINAPI WSASocketW(int af, int type, int protocol,
    */
 
    TRACE("af=%d type=%d protocol=%d protocol_info=%p group=%d flags=0x%x\n",
-         af, type, protocol, lpProtocolInfo, g, dwFlags );
+         af, type, protocol, lpProtocolInfo, g, flags );
 
     if (!num_startup)
     {
@@ -7558,10 +7626,16 @@ SOCKET WINAPI WSASocketW(int af, int type, int protocol,
     }
 
     /* hack for WSADuplicateSocket */
-    if (lpProtocolInfo && lpProtocolInfo->dwServiceFlags4 == 0xff00ff00) {
-      ret = lpProtocolInfo->dwServiceFlags3;
-      TRACE("\tgot duplicate %04lx\n", ret);
-      return ret;
+    if (lpProtocolInfo && lpProtocolInfo->dwServiceFlags4 == 0xff00ff00)
+    {
+        ret = lpProtocolInfo->dwServiceFlags3;
+        TRACE("\tgot duplicate %04lx\n", ret);
+        if (!socket_list_add(ret))
+        {
+            CloseHandle(SOCKET2HANDLE(ret));
+            return INVALID_SOCKET;
+        }
+        return ret;
     }
 
     if (lpProtocolInfo)
@@ -7574,7 +7648,13 @@ SOCKET WINAPI WSASocketW(int af, int type, int protocol,
             protocol = lpProtocolInfo->iProtocol;
     }
 
-    if (!type && (af || protocol))
+    if (!af && !protocol)
+    {
+        WSASetLastError(WSAEINVAL);
+        return INVALID_SOCKET;
+    }
+
+    if (!type)
     {
         int autoproto = protocol;
         WSAPROTOCOL_INFOW infow;
@@ -7644,57 +7724,72 @@ SOCKET WINAPI WSASocketW(int af, int type, int protocol,
         goto done;
     }
 
-    SERVER_START_REQ( create_socket )
+    RtlInitUnicodeString(&string, afdW);
+    InitializeObjectAttributes(&attr, &string, (flags & WSA_FLAG_NO_HANDLE_INHERIT) ? 0 : OBJ_INHERIT, NULL, NULL);
+    if ((status = NtOpenFile(&handle, GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE, &attr,
+            &io, 0, (flags & WSA_FLAG_OVERLAPPED) ? 0 : FILE_SYNCHRONOUS_IO_NONALERT)))
     {
-        req->family     = unixaf;
-        req->type       = unixtype;
-        req->protocol   = protocol;
-        req->access     = GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE;
-        req->attributes = (dwFlags & WSA_FLAG_NO_HANDLE_INHERIT) ? 0 : OBJ_INHERIT;
-        req->flags      = dwFlags & ~WSA_FLAG_NO_HANDLE_INHERIT;
-        err = NtStatusToWSAError( wine_server_call( req ) );
-        ret = HANDLE2SOCKET( wine_server_ptr_handle( reply->handle ));
+        WARN("Failed to create socket, status %#x.\n", status);
+        WSASetLastError(NtStatusToWSAError(status));
+        return INVALID_SOCKET;
     }
-    SERVER_END_REQ;
-    if (ret)
-    {
-        TRACE("\tcreated %04lx\n", ret );
-        if (ipxptype > 0)
-            set_ipx_packettype(ret, ipxptype);
 
-        if (unixaf == AF_INET || unixaf == AF_INET6)
+    create_params.family = unixaf;
+    create_params.type = unixtype;
+    create_params.protocol = protocol;
+    create_params.flags = flags & ~(WSA_FLAG_NO_HANDLE_INHERIT | WSA_FLAG_OVERLAPPED);
+    if ((status = NtDeviceIoControlFile(handle, NULL, NULL, NULL, &io,
+            IOCTL_AFD_CREATE, &create_params, sizeof(create_params), NULL, 0)))
+    {
+        WARN("Failed to initialize socket, status %#x.\n", status);
+        err = NtStatusToWSAError(status);
+        if (err == WSAEACCES) /* raw socket denied */
         {
-            /* ensure IP_DONTFRAGMENT is disabled for SOCK_DGRAM and SOCK_RAW, enabled for SOCK_STREAM */
-            if (unixtype == SOCK_DGRAM || unixtype == SOCK_RAW) /* in Linux the global default can be enabled */
-                set_dont_fragment(ret, unixaf == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, FALSE);
-            else if (unixtype == SOCK_STREAM)
-                set_dont_fragment(ret, unixaf == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, TRUE);
+            if (type == SOCK_RAW)
+                ERR_(winediag)("Failed to create a socket of type SOCK_RAW, this requires special permissions.\n");
+            else
+                ERR_(winediag)("Failed to create socket, this requires special permissions.\n");
         }
+        WSASetLastError(err);
+        NtClose(handle);
+        return INVALID_SOCKET;
+    }
+
+    ret = HANDLE2SOCKET(handle);
+    TRACE("\tcreated %04lx\n", ret );
+
+    if (ipxptype > 0)
+        set_ipx_packettype(ret, ipxptype);
+
+    if (unixaf == AF_INET || unixaf == AF_INET6)
+    {
+        /* ensure IP_DONTFRAGMENT is disabled for SOCK_DGRAM and SOCK_RAW, enabled for SOCK_STREAM */
+        if (unixtype == SOCK_DGRAM || unixtype == SOCK_RAW) /* in Linux the global default can be enabled */
+            set_dont_fragment(ret, unixaf == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, FALSE);
+        else if (unixtype == SOCK_STREAM)
+            set_dont_fragment(ret, unixaf == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, TRUE);
+    }
 
 #ifdef IPV6_V6ONLY
-        if (unixaf == AF_INET6)
-        {
-            int fd = get_sock_fd(ret, 0, NULL);
-            if (fd != -1)
-            {
-                /* IPV6_V6ONLY is set by default on Windows */
-                int enable = 1;
-                if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &enable, sizeof(enable)))
-                    WARN("\tsetting IPV6_V6ONLY failed - errno = %i\n", errno);
-                release_sock_fd(ret, fd);
-            }
-        }
-#endif
-       return ret;
-    }
-
-    if (err == WSAEACCES) /* raw socket denied */
+    if (unixaf == AF_INET6)
     {
-        if (type == SOCK_RAW)
-            ERR_(winediag)("Failed to create a socket of type SOCK_RAW, this requires special permissions.\n");
-        else
-            ERR_(winediag)("Failed to create socket, this requires special permissions.\n");
+        int fd = get_sock_fd(ret, 0, NULL);
+        if (fd != -1)
+        {
+            /* IPV6_V6ONLY is set by default on Windows */
+            int enable = 1;
+            if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &enable, sizeof(enable)))
+                WARN("\tsetting IPV6_V6ONLY failed - errno = %i\n", errno);
+            release_sock_fd(ret, fd);
+        }
     }
+#endif
+    if (!socket_list_add(ret))
+    {
+        CloseHandle(handle);
+        return INVALID_SOCKET;
+    }
+    return ret;
 
 done:
     WARN("\t\tfailed, error %d!\n", err);
@@ -8940,10 +9035,21 @@ INT WINAPI WSCGetProviderPath( LPGUID provider, LPWSTR path, LPINT len, LPINT er
 {
     FIXME( "(%s %p %p %p) Stub!\n", debugstr_guid(provider), path, len, errcode );
 
-    if (!errcode || !provider || !len) return WSAEFAULT;
+    if (!provider || !len)
+    {
+        if (errcode)
+            *errcode = WSAEFAULT;
+        return SOCKET_ERROR;
+    }
 
-    *errcode = WSAEINVAL;
-    return SOCKET_ERROR;
+    if (*len <= 0)
+    {
+        if (errcode)
+            *errcode = WSAEINVAL;
+        return SOCKET_ERROR;
+    }
+
+    return 0;
 }
 
 /***********************************************************************

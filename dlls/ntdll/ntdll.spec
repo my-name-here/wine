@@ -208,7 +208,7 @@
 # @ stub NtEnumerateSystemEnvironmentValuesEx
 @ stdcall -syscall NtEnumerateValueKey(long long long ptr long ptr)
 @ stub NtExtendSection
-# @ stub NtFilterToken
+@ stdcall -syscall NtFilterToken(long long ptr ptr ptr ptr)
 @ stdcall -syscall NtFindAtom(ptr long ptr)
 @ stdcall -syscall NtFlushBuffersFile(long ptr)
 @ stdcall -syscall NtFlushInstructionCache(long ptr long)
@@ -525,6 +525,7 @@
 @ stub RtlConvertUiListToApiList
 @ stdcall -arch=win32 -ret64 RtlConvertUlongToLargeInteger(long)
 # @ stub RtlConvertVariantToProperty
+@ stdcall RtlCopyExtendedContext(ptr long ptr)
 @ stdcall RtlCopyLuid(ptr ptr)
 @ stdcall RtlCopyLuidAndAttributesArray(long ptr ptr)
 @ stdcall -arch=x86_64 RtlCopyMemory(ptr ptr long)
@@ -695,6 +696,9 @@
 # @ stub RtlGetElementGenericTableAvl
 @ stdcall RtlGetEnabledExtendedFeatures(int64)
 @ stdcall RtlGetExePath(wstr ptr)
+@ stdcall RtlGetExtendedContextLength(long ptr)
+@ stdcall RtlGetExtendedContextLength2(long ptr int64)
+@ stdcall -ret64 RtlGetExtendedFeaturesMask(ptr)
 # @ stub RtlGetFirstRange
 @ stdcall RtlGetFrame()
 @ stdcall RtlGetFullPathName_U(wstr long ptr ptr)
@@ -755,6 +759,8 @@
 @ stdcall RtlInitializeCriticalSection(ptr)
 @ stdcall RtlInitializeCriticalSectionAndSpinCount(ptr long)
 @ stdcall RtlInitializeCriticalSectionEx(ptr long long)
+@ stdcall RtlInitializeExtendedContext(ptr long ptr)
+@ stdcall RtlInitializeExtendedContext2(ptr long ptr int64)
 @ stdcall RtlInitializeGenericTable(ptr ptr ptr ptr ptr)
 @ stdcall RtlInitializeGenericTableAvl(ptr ptr ptr ptr ptr)
 @ stdcall RtlInitializeHandleTable(long long ptr)
@@ -822,6 +828,9 @@
 @ stdcall RtlLengthSid(ptr)
 @ stdcall RtlLocalTimeToSystemTime(ptr ptr)
 @ stdcall RtlLocaleNameToLcid(wstr ptr long)
+@ stdcall RtlLocateExtendedFeature(ptr long ptr)
+@ stdcall RtlLocateExtendedFeature2(ptr long ptr ptr)
+@ stdcall RtlLocateLegacyContext(ptr ptr)
 # @ stub RtlLockBootStatusData
 @ stdcall RtlLockHeap(long)
 # @ stub RtlLockMemoryStreamRegion
@@ -939,6 +948,7 @@
 @ stdcall RtlSetCurrentTransaction(ptr)
 @ stdcall RtlSetDaclSecurityDescriptor(ptr long ptr long)
 @ stdcall RtlSetEnvironmentVariable(ptr ptr ptr)
+@ stdcall RtlSetExtendedFeaturesMask(ptr int64)
 @ stdcall RtlSetGroupSecurityDescriptor(ptr ptr long)
 @ stdcall RtlSetHeapInformation(long long ptr long)
 @ stub RtlSetInformationAcl
@@ -1427,7 +1437,7 @@
 @ cdecl -private -arch=i386 _CIpow()
 @ cdecl -private -arch=i386 _CIsin()
 @ cdecl -private -arch=i386 _CIsqrt()
-@ stdcall -arch=x86_64 __C_specific_handler(ptr long ptr ptr)
+@ stdcall -arch=x86_64,arm64 __C_specific_handler(ptr long ptr ptr)
 @ cdecl -arch=arm,x86_64 -norelay __chkstk()
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
@@ -1453,7 +1463,7 @@
 @ cdecl _itoa(long ptr long)
 @ cdecl _itow(long ptr long)
 @ cdecl _lfind(ptr ptr ptr long ptr)
-@ stdcall -arch=x86_64 _local_unwind(ptr ptr)
+@ stdcall -arch=x86_64,arm64 _local_unwind(ptr ptr)
 @ cdecl _ltoa(long ptr long)
 @ cdecl _ltow(long ptr long)
 @ cdecl _memccpy(ptr ptr long long)
@@ -1587,7 +1597,10 @@
 @ cdecl -syscall wine_server_release_fd(long long)
 @ cdecl -syscall wine_server_send_fd(long)
 @ cdecl -syscall __wine_make_process_system()
+
+# Unix interface
 @ cdecl __wine_set_unix_funcs(long ptr)
+@ cdecl __wine_init_unix_lib(long long ptr ptr)
 @ extern __wine_syscall_dispatcher
 @ extern -arch=i386 __wine_ldt_copy
 
