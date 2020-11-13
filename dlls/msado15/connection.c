@@ -23,6 +23,7 @@
 #include "initguid.h"
 #include "ocidl.h"
 #include "objbase.h"
+#include "msdasc.h"
 #include "olectl.h"
 #include "msado15_backcompat.h"
 
@@ -53,6 +54,10 @@ struct connection
     ObjectStateEnum           state;
     LONG                      timeout;
     WCHAR                    *datasource;
+    WCHAR                    *provider;
+    ConnectModeEnum           mode;
+    CursorLocationEnum        location;
+    IUnknown                 *session;
     struct connection_point   cp_connev;
 };
 
@@ -95,7 +100,9 @@ static ULONG WINAPI connection_Release( _Connection *iface )
             if (connection->cp_connev.sinks[i])
                 IUnknown_Release( connection->cp_connev.sinks[i] );
         }
+        if (connection->session) IUnknown_Release( connection->session );
         heap_free( connection->cp_connev.sinks );
+        heap_free( connection->provider );
         heap_free( connection->datasource );
         heap_free( connection );
     }
@@ -186,7 +193,7 @@ static HRESULT WINAPI connection_put_ConnectionString( _Connection *iface, BSTR 
     struct connection *connection = impl_from_Connection( iface );
     WCHAR *source = NULL;
 
-    TRACE( "%p, %s\n", connection, debugstr_w( !wcsstr( str, L"Password" ) ? L"<hidden>" : str ) );
+    TRACE( "%p, %s\n", connection, debugstr_w( str && !wcsstr( str, L"Password" ) ? L"<hidden>" : str ) );
 
     if (str && !(source = strdupW( str ))) return E_OUTOFMEMORY;
     heap_free( connection->datasource );
@@ -236,6 +243,12 @@ static HRESULT WINAPI connection_Close( _Connection *iface )
 
     if (connection->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
 
+    if (connection->session)
+    {
+        IUnknown_Release( connection->session );
+        connection->session = NULL;
+    }
+
     connection->state = adStateClosed;
     return S_OK;
 }
@@ -269,13 +282,50 @@ static HRESULT WINAPI connection_Open( _Connection *iface, BSTR connect_str, BST
                                        LONG options )
 {
     struct connection *connection = impl_from_Connection( iface );
-    FIXME( "%p, %s, %s, %p, %08x\n", iface, debugstr_w(connect_str), debugstr_w(userid),
-           password, options );
+    IDBProperties *props;
+    IDBInitialize *dbinit = NULL;
+    IDataInitialize *datainit;
+    IDBCreateSession *session = NULL;
+    HRESULT hr;
+
+    TRACE( "%p, %s, %s, %p, %08x\n", iface, debugstr_w(connect_str), debugstr_w(userid), password, options );
 
     if (connection->state == adStateOpen) return MAKE_ADO_HRESULT( adErrObjectOpen );
+    if (!connect_str) return E_FAIL;
 
-    connection->state = adStateOpen;
-    return S_OK;
+    if ((hr = CoCreateInstance( &CLSID_MSDAINITIALIZE, NULL, CLSCTX_INPROC_SERVER, &IID_IDataInitialize,
+                                (void **)&datainit )) != S_OK) return hr;
+    if ((hr = IDataInitialize_GetDataSource( datainit, NULL, CLSCTX_INPROC_SERVER, connect_str, &IID_IDBInitialize,
+                                             (IUnknown **)&dbinit )) != S_OK) goto done;
+    if ((hr = IDBInitialize_QueryInterface( dbinit, &IID_IDBProperties, (void **)&props )) != S_OK) goto done;
+
+    /* TODO - Update username/password if required. */
+    if ((userid && *userid) || (password && *password))
+        FIXME("Username/password parameters currently not supported\n");
+
+    if ((hr = IDBInitialize_Initialize( dbinit )) != S_OK) goto done;
+    if ((hr = IDBInitialize_QueryInterface( dbinit, &IID_IDBCreateSession, (void **)&session )) != S_OK) goto done;
+    if ((hr = IDBCreateSession_CreateSession( session, NULL, &IID_IUnknown, &connection->session )) == S_OK)
+    {
+        connection->state = adStateOpen;
+    }
+    IDBCreateSession_Release( session );
+
+done:
+    if (hr != S_OK && connection->session)
+    {
+        IUnknown_Release( connection->session );
+        connection->session = NULL;
+    }
+    if (dbinit)
+    {
+        IDBInitialize_Uninitialize( dbinit );
+        IDBInitialize_Release( dbinit );
+    }
+    IDataInitialize_Release( datainit );
+
+    TRACE("ret 0x%08x\n", hr);
+    return hr;
 }
 
 static HRESULT WINAPI connection_get_Errors( _Connection *iface, Errors **obj )
@@ -322,38 +372,69 @@ static HRESULT WINAPI connection_put_Attributes( _Connection *iface, LONG attr )
 
 static HRESULT WINAPI connection_get_CursorLocation( _Connection *iface, CursorLocationEnum *cursor_loc )
 {
-    FIXME( "%p, %p\n", iface, cursor_loc );
-    return E_NOTIMPL;
+    struct connection *connection = impl_from_Connection( iface );
+
+    TRACE( "%p, %p\n", iface, cursor_loc );
+
+    *cursor_loc = connection->location;
+    return S_OK;
 }
 
 static HRESULT WINAPI connection_put_CursorLocation( _Connection *iface, CursorLocationEnum cursor_loc )
 {
-    FIXME( "%p, %u\n", iface, cursor_loc );
-    return E_NOTIMPL;
+    struct connection *connection = impl_from_Connection( iface );
+
+    TRACE( "%p, %u\n", iface, cursor_loc );
+
+    connection->location = cursor_loc;
+    return S_OK;
 }
 
 static HRESULT WINAPI connection_get_Mode( _Connection *iface, ConnectModeEnum *mode )
 {
-    FIXME( "%p, %p\n", iface, mode );
-    return E_NOTIMPL;
+    struct connection *connection = impl_from_Connection( iface );
+
+    TRACE( "%p, %p\n", iface, mode );
+
+    *mode = connection->mode;
+    return S_OK;
 }
 
 static HRESULT WINAPI connection_put_Mode( _Connection *iface, ConnectModeEnum mode )
 {
-    FIXME( "%p, %u\n", iface, mode );
-    return E_NOTIMPL;
+    struct connection *connection = impl_from_Connection( iface );
+
+    TRACE( "%p, %u\n", iface, mode );
+
+    connection->mode = mode;
+    return S_OK;
 }
 
 static HRESULT WINAPI connection_get_Provider( _Connection *iface, BSTR *str )
 {
-    FIXME( "%p, %p\n", iface, str );
-    return E_NOTIMPL;
+    struct connection *connection = impl_from_Connection( iface );
+    BSTR provider = NULL;
+
+    TRACE( "%p, %p\n", iface, str );
+
+    if (connection->provider && !(provider = SysAllocString( connection->provider ))) return E_OUTOFMEMORY;
+    *str = provider;
+    return S_OK;
 }
 
 static HRESULT WINAPI connection_put_Provider( _Connection *iface, BSTR str )
 {
-    FIXME( "%p, %s\n", iface, debugstr_w(str) );
-    return E_NOTIMPL;
+    struct connection *connection = impl_from_Connection( iface );
+    WCHAR *provider = NULL;
+
+    TRACE( "%p, %s\n", iface, debugstr_w(str) );
+
+    if (!str) return MAKE_ADO_HRESULT(adErrInvalidArgument);
+
+    if (!(provider = strdupW( str ))) return E_OUTOFMEMORY;
+    heap_free( connection->provider );
+    connection->provider = provider;
+    return S_OK;
 }
 
 static HRESULT WINAPI connection_get_State( _Connection *iface, LONG *state )
@@ -646,6 +727,14 @@ HRESULT Connection_create( void **obj )
     connection->state = adStateClosed;
     connection->timeout = 30;
     connection->datasource = NULL;
+    if (!(connection->provider = strdupW( L"MSDASQL" )))
+    {
+        heap_free( connection );
+        return E_OUTOFMEMORY;
+    }
+    connection->mode = adModeUnknown;
+    connection->location = adUseServer;
+    connection->session = NULL;
 
     connection->cp_connev.conn = connection;
     connection->cp_connev.riid = &DIID_ConnectionEvents;

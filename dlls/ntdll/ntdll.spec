@@ -141,6 +141,7 @@
 # @ stub NtAllocateUserPhysicalPages
 @ stdcall -syscall NtAllocateUuids(ptr ptr ptr ptr)
 @ stdcall -syscall NtAllocateVirtualMemory(long ptr long ptr long long)
+@ stdcall -syscall NtAllocateVirtualMemoryEx(long ptr ptr long long ptr long)
 @ stdcall -syscall NtAreMappedFilesTheSame(ptr ptr)
 @ stdcall -syscall NtAssignProcessToJobObject(long long)
 @ stub NtCallbackReturn
@@ -222,7 +223,7 @@
 @ stdcall -norelay -syscall NtGetContextThread(long ptr)
 @ stdcall -syscall NtGetCurrentProcessorNumber()
 # @ stub NtGetDevicePowerState
-@ stdcall NtGetNlsSectionPtr(long long long ptr ptr)
+@ stdcall -syscall NtGetNlsSectionPtr(long long long ptr ptr)
 @ stub NtGetPlugPlayEvent
 @ stdcall NtGetTickCount()
 @ stdcall -syscall NtGetWriteWatch(long long ptr long ptr ptr ptr)
@@ -666,6 +667,10 @@
 @ stdcall RtlFindSetRuns(ptr ptr long long)
 @ stdcall RtlFirstEntrySList(ptr)
 @ stdcall RtlFirstFreeAce(ptr ptr)
+@ stdcall RtlFlsAlloc(ptr ptr)
+@ stdcall RtlFlsFree(long)
+@ stdcall RtlFlsGetValue(long ptr)
+@ stdcall RtlFlsSetValue(long ptr)
 @ stub RtlFlushPropertySet
 # @ stub RtlFlushSecureMemoryCache
 @ stdcall RtlFormatCurrentUserKeyPath(ptr)
@@ -870,6 +875,7 @@
 @ stdcall RtlPopFrame(ptr)
 @ stdcall RtlPrefixString(ptr ptr long)
 @ stdcall RtlPrefixUnicodeString(ptr ptr long)
+@ stdcall RtlProcessFlsData(ptr long)
 @ stub RtlPropertySetNameToGuid
 @ stub RtlProtectHeap
 @ stdcall RtlPushFrame(ptr)
@@ -1141,6 +1147,7 @@
 # @ stub ZwAllocateUserPhysicalPages
 @ stdcall -private -syscall ZwAllocateUuids(ptr ptr ptr ptr) NtAllocateUuids
 @ stdcall -private -syscall ZwAllocateVirtualMemory(long ptr long ptr long long) NtAllocateVirtualMemory
+@ stdcall -private -syscall ZwAllocateVirtualMemoryEx(long ptr ptr long long ptr long) NtAllocateVirtualMemoryEx
 @ stdcall -private -syscall ZwAreMappedFilesTheSame(ptr ptr) NtAreMappedFilesTheSame
 @ stdcall -private -syscall ZwAssignProcessToJobObject(long long) NtAssignProcessToJobObject
 @ stub ZwCallbackReturn
@@ -1221,7 +1228,7 @@
 @ stdcall -private -norelay -syscall ZwGetContextThread(long ptr) NtGetContextThread
 @ stdcall -private -syscall ZwGetCurrentProcessorNumber() NtGetCurrentProcessorNumber
 # @ stub ZwGetDevicePowerState
-@ stdcall -private ZwGetNlsSectionPtr(long long long ptr ptr) NtGetNlsSectionPtr
+@ stdcall -private -syscall ZwGetNlsSectionPtr(long long long ptr ptr) NtGetNlsSectionPtr
 @ stub ZwGetPlugPlayEvent
 @ stdcall -private ZwGetTickCount() NtGetTickCount
 @ stdcall -private -syscall ZwGetWriteWatch(long long ptr long ptr ptr ptr) NtGetWriteWatch

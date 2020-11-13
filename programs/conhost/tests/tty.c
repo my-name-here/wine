@@ -37,6 +37,7 @@ static void fetch_console_output_(unsigned int line)
 
     if (console_output_count == sizeof(console_output)) return;
 
+    memset(&o, 0, sizeof(o));
     o.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     ret = ReadFile(console_pipe, console_output + console_output_count,
                    sizeof(console_output) - console_output_count, NULL, &o);
@@ -1401,7 +1402,11 @@ START_TEST(tty)
     if (argc > 3)
     {
         HANDLE pipe;
+        DWORD mode;
         sscanf(argv[3], "%p", &pipe);
+        /* if std output is console, silence debug output so it does not interfere with tests */
+        if (GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode))
+            winetest_debug = 0;
         child_process(pipe);
         return;
     }

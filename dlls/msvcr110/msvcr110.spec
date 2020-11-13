@@ -513,7 +513,7 @@
 @ stub -arch=arm ?_Copy_str@exception@std@@AAAXPBD@Z
 @ stub -arch=i386 ?_Copy_str@exception@std@@AAEXPBD@Z
 @ stub -arch=win64 ?_Copy_str@exception@std@@AEAAXPEBD@Z
-@ stub ?_CurrentContext@_Context@details@Concurrency@@SA?AV123@XZ
+@ cdecl ?_CurrentContext@_Context@details@Concurrency@@SA?AV123@XZ(ptr) _Context__CurrentContext
 @ stub ?_Current_node@location@Concurrency@@SA?AV12@XZ
 @ stub -arch=arm ?_DeregisterCallback@_CancellationTokenState@details@Concurrency@@QAAXPAV_CancellationTokenRegistration@23@@Z
 @ stub -arch=i386 ?_DeregisterCallback@_CancellationTokenState@details@Concurrency@@QAEXPAV_CancellationTokenRegistration@23@@Z
@@ -1869,7 +1869,7 @@
 @ cdecl _wcsrev(wstr) MSVCRT__wcsrev
 @ cdecl _wcsset(wstr long) MSVCRT__wcsset
 @ cdecl _wcsset_s(wstr long long) MSVCRT__wcsset_s
-@ cdecl _wcstod_l(wstr ptr long) MSVCRT__wcstod_l
+@ cdecl _wcstod_l(wstr ptr ptr) MSVCRT__wcstod_l
 @ cdecl -ret64 _wcstoi64(wstr ptr long) MSVCRT__wcstoi64
 @ cdecl -ret64 _wcstoi64_l(wstr ptr long ptr) MSVCRT__wcstoi64_l
 @ cdecl _wcstol_l(wstr ptr long ptr) MSVCRT__wcstol_l

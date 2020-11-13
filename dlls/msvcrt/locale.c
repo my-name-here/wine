@@ -351,6 +351,11 @@ LCID MSVCRT_locale_to_LCID(const char *locale, unsigned short *codepage, BOOL *s
     } else if (!MSVCRT__strnicmp(cp, ".OCP", 4)) {
         GetLocaleInfoW(lcid, LOCALE_IDEFAULTCODEPAGE | LOCALE_RETURN_NUMBER,
                 (WCHAR *)&locale_cp, sizeof(DWORD)/sizeof(WCHAR));
+#if _MSVCR_VER >= 140
+    } else if (!MSVCRT__strnicmp(cp, ".UTF-8", 6)
+            || !MSVCRT__strnicmp(cp, ".UTF8", 5)) {
+        locale_cp = CP_UTF8;
+#endif
     } else {
         locale_cp = atoi(cp + 1);
     }
@@ -452,7 +457,7 @@ static inline void swap_pointers(void **p1, void **p2) {
 }
 
 /* INTERNAL: returns pthreadlocinfo struct */
-MSVCRT_pthreadlocinfo get_locinfo(void) {
+MSVCRT_pthreadlocinfo CDECL get_locinfo(void) {
     thread_data_t *data = msvcrt_get_thread_data();
 
     if(!data || !data->have_locale)
@@ -462,7 +467,7 @@ MSVCRT_pthreadlocinfo get_locinfo(void) {
 }
 
 /* INTERNAL: returns pthreadlocinfo struct */
-MSVCRT_pthreadmbcinfo get_mbcinfo(void) {
+MSVCRT_pthreadmbcinfo CDECL get_mbcinfo(void) {
     thread_data_t *data = msvcrt_get_thread_data();
 
     if(!data || !data->have_locale)
@@ -953,6 +958,31 @@ void free_mbcinfo(MSVCRT_pthreadmbcinfo mbcinfo)
     MSVCRT_free(mbcinfo);
 }
 
+MSVCRT__locale_t CDECL get_current_locale_noalloc(MSVCRT__locale_t locale)
+{
+    thread_data_t *data = msvcrt_get_thread_data();
+
+    if(!data || !data->have_locale)
+    {
+        *locale = *MSVCRT_locale;
+    }
+    else
+    {
+        locale->locinfo = data->locinfo;
+        locale->mbcinfo = data->mbcinfo;
+    }
+
+    InterlockedIncrement(&locale->locinfo->refcount);
+    InterlockedIncrement(&locale->mbcinfo->refcount);
+    return locale;
+}
+
+void CDECL free_locale_noalloc(MSVCRT__locale_t locale)
+{
+    free_locinfo(locale->locinfo);
+    free_mbcinfo(locale->mbcinfo);
+}
+
 /*********************************************************************
  *      _get_current_locale (MSVCRT.@)
  */
@@ -962,11 +992,7 @@ MSVCRT__locale_t CDECL MSVCRT__get_current_locale(void)
     if(!loc)
         return NULL;
 
-    loc->locinfo = get_locinfo();
-    loc->mbcinfo = get_mbcinfo();
-    InterlockedIncrement(&loc->locinfo->refcount);
-    InterlockedIncrement(&loc->mbcinfo->refcount);
-    return loc;
+    return get_current_locale_noalloc(loc);
 }
 
 /*********************************************************************
@@ -977,8 +1003,7 @@ void CDECL MSVCRT__free_locale(MSVCRT__locale_t locale)
     if (!locale)
         return;
 
-    free_locinfo(locale->locinfo);
-    free_mbcinfo(locale->mbcinfo);
+    free_locale_noalloc(locale);
     MSVCRT_free(locale);
 }
 

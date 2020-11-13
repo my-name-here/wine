@@ -170,6 +170,10 @@ typedef struct
     {
         unsigned char i386_regs[512];
     } ext;
+    union
+    {
+        struct { struct { unsigned __int64 low, high; } ymm_high[16]; } ymm_high_regs;
+    } ymm;
 } context_t;
 
 #define SERVER_CTX_CONTROL            0x01
@@ -178,6 +182,7 @@ typedef struct
 #define SERVER_CTX_FLOATING_POINT     0x08
 #define SERVER_CTX_DEBUG_REGISTERS    0x10
 #define SERVER_CTX_EXTENDED_REGISTERS 0x20
+#define SERVER_CTX_YMM_REGISTERS      0x40
 
 
 struct send_fd
@@ -765,6 +770,15 @@ struct rawinput_device
     unsigned int   flags;
     user_handle_t  target;
 };
+
+typedef struct
+{
+    int x;
+    int y;
+    unsigned int time;
+    int __pad;
+    lparam_t info;
+} cursor_pos_t;
 
 
 
@@ -1695,36 +1709,6 @@ struct unlock_file_reply
 
 
 
-struct accept_socket_request
-{
-    struct request_header __header;
-    obj_handle_t lhandle;
-    unsigned int access;
-    unsigned int attributes;
-};
-struct accept_socket_reply
-{
-    struct reply_header __header;
-    obj_handle_t handle;
-    char __pad_12[4];
-};
-
-
-
-struct accept_into_socket_request
-{
-    struct request_header __header;
-    obj_handle_t lhandle;
-    obj_handle_t ahandle;
-    char __pad_20[4];
-};
-struct accept_into_socket_reply
-{
-    struct reply_header __header;
-};
-
-
-
 struct set_socket_event_request
 {
     struct request_header __header;
@@ -1800,95 +1784,6 @@ struct set_socket_deferred_request
 struct set_socket_deferred_reply
 {
     struct reply_header __header;
-};
-
-
-struct alloc_console_request
-{
-    struct request_header __header;
-    unsigned int access;
-    unsigned int attributes;
-    process_id_t pid;
-};
-struct alloc_console_reply
-{
-    struct reply_header __header;
-    obj_handle_t handle_in;
-    char __pad_12[4];
-};
-
-
-
-struct free_console_request
-{
-    struct request_header __header;
-    char __pad_12[4];
-};
-struct free_console_reply
-{
-    struct reply_header __header;
-};
-
-
-
-struct get_console_wait_event_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-};
-struct get_console_wait_event_reply
-{
-    struct reply_header __header;
-    obj_handle_t event;
-    char __pad_12[4];
-};
-
-
-
-struct append_console_input_history_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    /* VARARG(line,unicode_str); */
-};
-struct append_console_input_history_reply
-{
-    struct reply_header __header;
-};
-
-
-
-struct get_console_input_history_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    int          index;
-    char __pad_20[4];
-};
-struct get_console_input_history_reply
-{
-    struct reply_header __header;
-    int          total;
-    /* VARARG(line,unicode_str); */
-    char __pad_12[4];
-};
-
-
-
-struct create_console_output_request
-{
-    struct request_header __header;
-    obj_handle_t handle_in;
-    unsigned int access;
-    unsigned int attributes;
-    unsigned int share;
-    char __pad_28[4];
-};
-struct create_console_output_reply
-{
-    struct reply_header __header;
-    obj_handle_t handle_out;
-    char __pad_12[4];
 };
 
 
@@ -5258,6 +5153,18 @@ struct set_cursor_reply
 #define SET_CURSOR_NOCLIP 0x10
 
 
+struct get_cursor_history_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+};
+struct get_cursor_history_reply
+{
+    struct reply_header __header;
+    /* VARARG(history,cursor_positions); */
+};
+
+
 
 struct get_rawinput_buffer_request
 {
@@ -5497,19 +5404,11 @@ enum request
     REQ_get_volume_info,
     REQ_lock_file,
     REQ_unlock_file,
-    REQ_accept_socket,
-    REQ_accept_into_socket,
     REQ_set_socket_event,
     REQ_get_socket_event,
     REQ_get_socket_info,
     REQ_enable_socket_event,
     REQ_set_socket_deferred,
-    REQ_alloc_console,
-    REQ_free_console,
-    REQ_get_console_wait_event,
-    REQ_append_console_input_history,
-    REQ_get_console_input_history,
-    REQ_create_console_output,
     REQ_get_next_console_request,
     REQ_read_directory_changes,
     REQ_read_change,
@@ -5711,6 +5610,7 @@ enum request
     REQ_alloc_user_handle,
     REQ_free_user_handle,
     REQ_set_cursor,
+    REQ_get_cursor_history,
     REQ_get_rawinput_buffer,
     REQ_update_rawinput_devices,
     REQ_get_rawinput_devices,
@@ -5785,19 +5685,11 @@ union generic_request
     struct get_volume_info_request get_volume_info_request;
     struct lock_file_request lock_file_request;
     struct unlock_file_request unlock_file_request;
-    struct accept_socket_request accept_socket_request;
-    struct accept_into_socket_request accept_into_socket_request;
     struct set_socket_event_request set_socket_event_request;
     struct get_socket_event_request get_socket_event_request;
     struct get_socket_info_request get_socket_info_request;
     struct enable_socket_event_request enable_socket_event_request;
     struct set_socket_deferred_request set_socket_deferred_request;
-    struct alloc_console_request alloc_console_request;
-    struct free_console_request free_console_request;
-    struct get_console_wait_event_request get_console_wait_event_request;
-    struct append_console_input_history_request append_console_input_history_request;
-    struct get_console_input_history_request get_console_input_history_request;
-    struct create_console_output_request create_console_output_request;
     struct get_next_console_request_request get_next_console_request_request;
     struct read_directory_changes_request read_directory_changes_request;
     struct read_change_request read_change_request;
@@ -5999,6 +5891,7 @@ union generic_request
     struct alloc_user_handle_request alloc_user_handle_request;
     struct free_user_handle_request free_user_handle_request;
     struct set_cursor_request set_cursor_request;
+    struct get_cursor_history_request get_cursor_history_request;
     struct get_rawinput_buffer_request get_rawinput_buffer_request;
     struct update_rawinput_devices_request update_rawinput_devices_request;
     struct get_rawinput_devices_request get_rawinput_devices_request;
@@ -6071,19 +5964,11 @@ union generic_reply
     struct get_volume_info_reply get_volume_info_reply;
     struct lock_file_reply lock_file_reply;
     struct unlock_file_reply unlock_file_reply;
-    struct accept_socket_reply accept_socket_reply;
-    struct accept_into_socket_reply accept_into_socket_reply;
     struct set_socket_event_reply set_socket_event_reply;
     struct get_socket_event_reply get_socket_event_reply;
     struct get_socket_info_reply get_socket_info_reply;
     struct enable_socket_event_reply enable_socket_event_reply;
     struct set_socket_deferred_reply set_socket_deferred_reply;
-    struct alloc_console_reply alloc_console_reply;
-    struct free_console_reply free_console_reply;
-    struct get_console_wait_event_reply get_console_wait_event_reply;
-    struct append_console_input_history_reply append_console_input_history_reply;
-    struct get_console_input_history_reply get_console_input_history_reply;
-    struct create_console_output_reply create_console_output_reply;
     struct get_next_console_request_reply get_next_console_request_reply;
     struct read_directory_changes_reply read_directory_changes_reply;
     struct read_change_reply read_change_reply;
@@ -6285,6 +6170,7 @@ union generic_reply
     struct alloc_user_handle_reply alloc_user_handle_reply;
     struct free_user_handle_reply free_user_handle_reply;
     struct set_cursor_reply set_cursor_reply;
+    struct get_cursor_history_reply get_cursor_history_reply;
     struct get_rawinput_buffer_reply get_rawinput_buffer_reply;
     struct update_rawinput_devices_reply update_rawinput_devices_reply;
     struct get_rawinput_devices_reply get_rawinput_devices_reply;
@@ -6302,7 +6188,7 @@ union generic_reply
 
 /* ### protocol_version begin ### */
 
-#define SERVER_PROTOCOL_VERSION 647
+#define SERVER_PROTOCOL_VERSION 652
 
 /* ### protocol_version end ### */
 

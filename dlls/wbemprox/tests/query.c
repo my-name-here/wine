@@ -460,6 +460,8 @@ static void test_Win32_Process( IWbemServices *services, BOOL use_full_path )
     IWbemClassObject *process, *sig_in, *out;
     IWbemQualifierSet *qualifiers;
     VARIANT retval, val;
+    SAFEARRAY *names;
+    LONG bound, i;
     DWORD full_path_len = 0;
     LONG flavor;
     CIMTYPE type;
@@ -484,6 +486,21 @@ static void test_Win32_Process( IWbemServices *services, BOOL use_full_path )
         win_skip( "Win32_Process not available\n" );
         return;
     }
+    names = NULL;
+    hr = IWbemClassObject_GetNames( process, NULL, 0, NULL, &names );
+    ok( hr == S_OK, "got %08x\n", hr );
+    ok( names != NULL, "names not set\n" );
+    hr = SafeArrayGetUBound( names, 1, &bound );
+    ok( hr == S_OK, "got %08x\n", hr );
+    for (i = 0; i <= bound; i++)
+    {
+        BSTR str;
+        hr = SafeArrayGetElement( names, &i, &str );
+        ok( hr == S_OK, "%d: got %08x\n", i, hr );
+        SysFreeString( str );
+    }
+    SafeArrayDestroy( names );
+
     sig_in = (void*)0xdeadbeef;
     hr = IWbemClassObject_GetMethod( process, L"GetOwner", 0, &sig_in, NULL );
     ok( hr == S_OK, "failed to get GetOwner method %08x\n", hr );
@@ -1414,6 +1431,13 @@ static void test_Win32_VideoController( IWbemServices *services )
         hr = IEnumWbemClassObject_Next( result, 10000, 1, &obj, &count );
         if (hr != S_OK) break;
 
+        check_property( obj, L"__CLASS", VT_BSTR, CIM_STRING );
+        check_property( obj, L"__GENUS", VT_I4, CIM_SINT32 );
+        check_property( obj, L"__NAMESPACE", VT_BSTR, CIM_STRING );
+        check_property( obj, L"__PATH", VT_BSTR, CIM_STRING );
+        check_property( obj, L"__PROPERTY_COUNT", VT_I4, CIM_SINT32 );
+        check_property( obj, L"__RELPATH", VT_BSTR, CIM_STRING );
+        check_property( obj, L"__SERVER", VT_BSTR, CIM_STRING );
         check_property( obj, L"AdapterCompatibility", VT_BSTR, CIM_STRING );
         check_property( obj, L"Availability", VT_I4, CIM_UINT16 );
         check_property( obj, L"ConfigManagerErrorCode", VT_I4, CIM_UINT32 );
@@ -1429,6 +1453,31 @@ static void test_Win32_VideoController( IWbemServices *services )
         VariantClear( &val );
 
         check_property( obj, L"Status", VT_BSTR, CIM_STRING );
+        IWbemClassObject_Release( obj );
+    }
+
+    IEnumWbemClassObject_Release( result );
+    SysFreeString( query );
+
+    query = SysAllocString( L"SELECT AdapterRAM FROM Win32_VideoController" );
+    hr = IWbemServices_ExecQuery( services, wql, query, 0, NULL, &result );
+    if (hr != S_OK)
+    {
+        win_skip( "Win32_VideoController not available\n" );
+        return;
+    }
+
+    for (;;)
+    {
+        hr = IEnumWbemClassObject_Next( result, 10000, 1, &obj, &count );
+        if (hr != S_OK) break;
+        check_property( obj, L"__CLASS", VT_BSTR, CIM_STRING );
+        check_property( obj, L"__GENUS", VT_I4, CIM_SINT32 );
+        check_property( obj, L"__NAMESPACE", VT_NULL, CIM_STRING );
+        check_property( obj, L"__PATH", VT_NULL, CIM_STRING );
+        check_property( obj, L"__PROPERTY_COUNT", VT_I4, CIM_SINT32 );
+        check_property( obj, L"__RELPATH", VT_NULL, CIM_STRING );
+        check_property( obj, L"__SERVER", VT_NULL, CIM_STRING );
         IWbemClassObject_Release( obj );
     }
 
@@ -1696,10 +1745,13 @@ static void test_Win32_SoundDevice( IWbemServices *services )
         hr = IEnumWbemClassObject_Next( result, 10000, 1, &obj, &count );
         if (hr != S_OK) break;
 
-        check_property( obj, L"Name", VT_BSTR, CIM_STRING );
-        check_property( obj, L"ProductName", VT_BSTR, CIM_STRING );
-        check_property( obj, L"StatusInfo", VT_I4, CIM_UINT16 );
+        check_property( obj, L"DeviceID", VT_BSTR, CIM_STRING );
         check_property( obj, L"Manufacturer", VT_BSTR, CIM_STRING );
+        check_property( obj, L"Name", VT_BSTR, CIM_STRING );
+        check_property( obj, L"PNPDeviceID", VT_BSTR, CIM_STRING );
+        check_property( obj, L"ProductName", VT_BSTR, CIM_STRING );
+        check_property( obj, L"Status", VT_BSTR, CIM_STRING );
+        check_property( obj, L"StatusInfo", VT_I4, CIM_UINT16 );
         IWbemClassObject_Release( obj );
     }
 

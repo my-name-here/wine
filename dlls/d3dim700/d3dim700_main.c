@@ -1,7 +1,6 @@
 /*
- * Console private definitions
  *
- * Copyright 2002 Eric Pouech
+ * Copyright 2020 Austin English
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,17 +17,26 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __WINE_CONSOLE_PRIVATE_H
-#define __WINE_CONSOLE_PRIVATE_H
+#include <stdarg.h>
 
-/* console.c */
-extern int      CONSOLE_GetHistory(int idx, WCHAR* buf, int buf_len) DECLSPEC_HIDDEN;
-extern BOOL     CONSOLE_AppendHistory(const WCHAR *p) DECLSPEC_HIDDEN;
-extern unsigned CONSOLE_GetNumHistoryEntries(HANDLE) DECLSPEC_HIDDEN;
-extern void     CONSOLE_FillLineUniform(HANDLE hConsoleOutput, int i, int j, int len, LPCHAR_INFO lpFill) DECLSPEC_HIDDEN;
-extern BOOL     CONSOLE_GetEditionMode(HANDLE, int*) DECLSPEC_HIDDEN;
+#include "windef.h"
+#include "winbase.h"
+#include "wine/debug.h"
 
-/* editline.c */
-extern WCHAR*   CONSOLE_Readline(HANDLE, BOOL) DECLSPEC_HIDDEN;
+WINE_DEFAULT_DEBUG_CHANNEL(d3dim700);
 
-#endif  /* __WINE_CONSOLE_PRIVATE_H */
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+{
+    TRACE("(%p, %u, %p)\n", instance, reason, reserved);
+
+    switch (reason)
+    {
+        case DLL_WINE_PREATTACH:
+            return FALSE;    /* prefer native version */
+        case DLL_PROCESS_ATTACH:
+            DisableThreadLibraryCalls(instance);
+            break;
+    }
+
+    return TRUE;
+}

@@ -39,6 +39,7 @@ DEFINE_GUID(MFVideoFormat_ABGR32, 0x00000020, 0x0000, 0x0010, 0x80, 0x00, 0x00, 
 #include "mferror.h"
 #include "mfidl.h"
 #include "initguid.h"
+#include "uuids.h"
 #include "mmdeviceapi.h"
 #include "audioclient.h"
 #include "evr.h"
@@ -53,6 +54,16 @@ static void _expect_ref(IUnknown* obj, ULONG expected_refcount, int line)
     refcount = IUnknown_Release(obj);
     ok_(__FILE__, line)(refcount == expected_refcount, "Unexpected refcount %d, expected %d.\n", refcount,
             expected_refcount);
+}
+
+static HWND create_window(void)
+{
+    RECT r = {0, 0, 640, 480};
+
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW | WS_VISIBLE, FALSE);
+
+    return CreateWindowA("static", "mf_test", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            0, 0, r.right - r.left, r.bottom - r.top, NULL, NULL, NULL, NULL);
 }
 
 static WCHAR *load_resource(const WCHAR *name)
@@ -1451,7 +1462,6 @@ todo_wine
         return;
 
     hr = IMFMediaSource_CreatePresentationDescriptor(source, &pd);
-todo_wine
     ok(hr == S_OK, "Failed to create descriptor, hr %#x.\n", hr);
     if (FAILED(hr))
         return;
@@ -2815,6 +2825,9 @@ static void test_quality_manager(void)
     hr = MFCreateStandardQualityManager(&manager);
     ok(hr == S_OK, "Failed to create quality manager, hr %#x.\n", hr);
 
+    hr = IMFQualityManager_NotifyPresentationClock(manager, NULL);
+    ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
     IMFQualityManager_Release(manager);
 }
 
@@ -2830,7 +2843,7 @@ static void test_sar(void)
     IMFMediaSink *sink, *sink2;
     IMFStreamSink *stream_sink;
     IMFAttributes *attributes;
-    DWORD id, flags, count;
+    DWORD i, id, flags, count;
     IMFActivate *activate;
     MFCLOCK_STATE state;
     IMFClock *clock;
@@ -2838,6 +2851,7 @@ static void test_sar(void)
     HRESULT hr;
     GUID guid;
     BOOL mute;
+    int found;
 
     hr = CoInitialize(NULL);
     ok(hr == S_OK, "Failed to initialize, hr %#x.\n", hr);
@@ -2987,6 +3001,22 @@ todo_wine
     ok(hr == S_OK, "Failed to get type count, hr %#x.\n", hr);
     ok(!!count, "Unexpected type count %u.\n", count);
 
+    /* A number of same major/subtype entries are returned, with different degrees of finer format
+       details. Some incomplete types are not accepted, check that at least one of them is considered supported. */
+
+    for (i = 0, found = -1; i < count; ++i)
+    {
+        hr = IMFMediaTypeHandler_GetMediaTypeByIndex(handler, i, &mediatype);
+        ok(hr == S_OK, "Failed to get media type, hr %#x.\n", hr);
+
+        if (SUCCEEDED(IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype, NULL)))
+            found = i;
+        IMFMediaType_Release(mediatype);
+
+        if (found != -1) break;
+    }
+    ok(found != -1, "Haven't found a supported type.\n");
+
     hr = IMFMediaTypeHandler_GetCurrentMediaType(handler, &mediatype);
     ok(hr == MF_E_NOT_INITIALIZED, "Unexpected hr %#x.\n", hr);
 
@@ -3004,16 +3034,16 @@ todo_wine
     hr = IMFMediaTypeHandler_SetCurrentMediaType(handler, mediatype);
     ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#x.\n", hr);
 
-    hr = IMFMediaTypeHandler_GetMediaTypeByIndex(handler, 0, &mediatype2);
+    hr = IMFMediaTypeHandler_GetMediaTypeByIndex(handler, found, &mediatype2);
     ok(hr == S_OK, "Failed to get media type, hr %#x.\n", hr);
 
-    hr = IMFMediaTypeHandler_GetMediaTypeByIndex(handler, 0, &mediatype3);
+    hr = IMFMediaTypeHandler_GetMediaTypeByIndex(handler, found, &mediatype3);
     ok(hr == S_OK, "Failed to get media type, hr %#x.\n", hr);
     ok(mediatype2 == mediatype3, "Unexpected instance.\n");
     IMFMediaType_Release(mediatype3);
 
     hr = IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype2, NULL);
-    ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
 
     IMFMediaType_Release(mediatype);
 
@@ -3025,38 +3055,7 @@ todo_wine
     ok(mediatype == mediatype2, "Unexpected instance.\n");
     IMFMediaType_Release(mediatype);
 
-    /* Type is validated against current type. */
-    hr = IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype2, NULL);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
-
     IMFMediaType_Release(mediatype2);
-
-    /* Set partial type. */
-    hr = MFCreateMediaType(&mediatype);
-    ok(hr == S_OK, "Failed to create media type, hr %#x.\n", hr);
-
-    hr = IMFMediaType_GetGUID(mediatype2, &MF_MT_SUBTYPE, &guid);
-    ok(hr == S_OK, "Failed to get attribute, hr %#x.\n", hr);
-
-    hr = IMFMediaType_SetGUID(mediatype, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
-    ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
-
-    hr = IMFMediaType_SetGUID(mediatype, &MF_MT_SUBTYPE, &guid);
-    ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
-
-    hr = IMFMediaTypeHandler_SetCurrentMediaType(handler, mediatype);
-    ok(hr == S_OK, "Failed to set current type, hr %#x.\n", hr);
-
-    hr = IMFMediaTypeHandler_GetCurrentMediaType(handler, &mediatype2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
-    ok(mediatype == mediatype2, "Unexpected instance.\n");
-    IMFMediaType_Release(mediatype2);
-
-    hr = IMFMediaType_GetCount(mediatype, &count);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
-    ok(count == 2, "Unexpected attribute count %u.\n", count);
-
-    IMFMediaType_Release(mediatype);
 
     /* Reset back to uninitialized state. */
     hr = IMFMediaTypeHandler_SetCurrentMediaType(handler, NULL);
@@ -3120,10 +3119,8 @@ todo_wine
     IMFAudioStreamVolume_Release(stream_volume);
 
     hr = MFGetService((IUnknown *)sink, &MR_AUDIO_POLICY_SERVICE, &IID_IMFAudioPolicy, (void **)&unk);
-todo_wine
-    ok(hr == MF_E_NOT_INITIALIZED, "Failed to get interface, hr %#x.\n", hr);
-    if (SUCCEEDED(hr))
-        IUnknown_Release(unk);
+    ok(hr == S_OK, "Failed to get interface, hr %#x.\n", hr);
+    IUnknown_Release(unk);
 
     /* Shutdown */
     EXPECT_REF(present_clock, 2);
@@ -3235,16 +3232,24 @@ todo_wine
 
 static void test_evr(void)
 {
+    IMFVideoSampleAllocatorCallback *allocator_callback;
+    IMFStreamSink *stream_sink, *stream_sink2;
+    IMFVideoDisplayControl *display_control;
+    IMFMediaType *media_type, *media_type2;
     IMFMediaEventGenerator *ev_generator;
+    IMFVideoSampleAllocator *allocator;
     IMFMediaTypeHandler *type_handler;
     IMFVideoRenderer *video_renderer;
     IMFClockStateSink *clock_sink;
     IMFMediaSinkPreroll *preroll;
     IMFMediaSink *sink, *sink2;
-    IMFStreamSink *stream_sink;
+    IMFAttributes *attributes;
     IMFActivate *activate;
+    HWND window, window2;
     DWORD flags, count;
+    LONG sample_count;
     IMFGetService *gs;
+    IMFSample *sample;
     IUnknown *unk;
     UINT64 value;
     HRESULT hr;
@@ -3253,8 +3258,42 @@ static void test_evr(void)
     hr = CoInitialize(NULL);
     ok(hr == S_OK, "Failed to initialize, hr %#x.\n", hr);
 
+    hr = MFCreateVideoRenderer(&IID_IMFVideoRenderer, (void **)&video_renderer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFVideoRenderer_InitializeRenderer(video_renderer, NULL, NULL);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    IMFVideoRenderer_Release(video_renderer);
+
     hr = MFCreateVideoRendererActivate(NULL, NULL);
     ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
+    /* Window */
+    window = create_window();
+    hr = MFCreateVideoRendererActivate(window, &activate);
+    ok(hr == S_OK, "Failed to create activate object, hr %#x.\n", hr);
+
+    hr = IMFActivate_GetUINT64(activate, &MF_ACTIVATE_VIDEO_WINDOW, &value);
+    ok(hr == S_OK, "Failed to get attribute, hr %#x.\n", hr);
+    ok(UlongToHandle(value) == window, "Unexpected value.\n");
+
+    hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&sink);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = MFGetService((IUnknown *)sink, &MR_VIDEO_RENDER_SERVICE, &IID_IMFVideoDisplayControl,
+            (void **)&display_control);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    window2 = NULL;
+    hr = IMFVideoDisplayControl_GetVideoWindow(display_control, &window2);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(window2 == window, "Unexpected window %p.\n", window2);
+
+    IMFVideoDisplayControl_Release(display_control);
+    IMFMediaSink_Release(sink);
+    IMFActivate_Release(activate);
+    DestroyWindow(window);
 
     hr = MFCreateVideoRendererActivate(NULL, &activate);
     ok(hr == S_OK, "Failed to create activate object, hr %#x.\n", hr);
@@ -3270,6 +3309,25 @@ static void test_evr(void)
     hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&sink);
     ok(hr == S_OK, "Failed to activate, hr %#x.\n", hr);
 
+    hr = IMFMediaSink_QueryInterface(sink, &IID_IMFAttributes, (void **)&attributes);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFAttributes_QueryInterface(attributes, &IID_IMFMediaSink, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+    hr = IMFAttributes_GetCount(attributes, &count);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(!!count, "Unexpected count %u.\n", count);
+    /* Rendering preferences are not immediately propagated to the presenter. */
+    hr = IMFAttributes_SetUINT32(attributes, &EVRConfig_ForceBob, 1);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = MFGetService((IUnknown *)sink, &MR_VIDEO_RENDER_SERVICE, &IID_IMFVideoDisplayControl, (void **)&display_control);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFVideoDisplayControl_GetRenderingPrefs(display_control, &flags);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(!flags, "Unexpected flags %#x.\n", flags);
+    IMFVideoDisplayControl_Release(display_control);
+    IMFAttributes_Release(attributes);
+
     /* Primary stream type handler. */
     hr = IMFMediaSink_GetStreamSinkById(sink, 0, &stream_sink);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
@@ -3284,8 +3342,102 @@ static void test_evr(void)
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
     ok(IsEqualGUID(&guid, &MFMediaType_Video), "Unexpected type %s.\n", wine_dbgstr_guid(&guid));
 
-    IMFStreamSink_Release(stream_sink);
+    /* Supported types are not advertised. */
+    hr = IMFMediaTypeHandler_GetMediaTypeCount(type_handler, NULL);
+    ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
+    count = 1;
+    hr = IMFMediaTypeHandler_GetMediaTypeCount(type_handler, &count);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(!count, "Unexpected count %u.\n", count);
+
+    hr = IMFMediaTypeHandler_GetMediaTypeByIndex(type_handler, 0, NULL);
+    ok(hr == MF_E_NO_MORE_TYPES, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_GetMediaTypeByIndex(type_handler, 0, &media_type);
+    ok(hr == MF_E_NO_MORE_TYPES, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_GetCurrentMediaType(type_handler, NULL);
+    ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_GetCurrentMediaType(type_handler, &media_type);
+    ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_SetCurrentMediaType(type_handler, NULL);
+    ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
+    hr = MFCreateMediaType(&media_type);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetGUID(media_type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetGUID(media_type, &MF_MT_SUBTYPE, &MFVideoFormat_RGB32);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetUINT64(media_type, &MF_MT_FRAME_SIZE, (UINT64)640 << 32 | 480);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_IsMediaTypeSupported(type_handler, NULL, NULL);
+    ok(hr == E_POINTER, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_IsMediaTypeSupported(type_handler, media_type, &media_type2);
+    ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetUINT32(media_type, &MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    media_type2 = (void *)0x1;
+    hr = IMFMediaTypeHandler_IsMediaTypeSupported(type_handler, media_type, &media_type2);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(!media_type2, "Unexpected media type %p.\n", media_type2);
+
+    hr = IMFMediaTypeHandler_SetCurrentMediaType(type_handler, media_type);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaTypeHandler_GetCurrentMediaType(type_handler, &media_type2);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFMediaType_QueryInterface(media_type2, &IID_IMFVideoMediaType, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+    IMFMediaType_Release(media_type2);
+
+    IMFMediaType_Release(media_type);
+
     IMFMediaTypeHandler_Release(type_handler);
+
+    /* Stream uses an allocator. */
+    hr = MFGetService((IUnknown *)stream_sink, &MR_VIDEO_ACCELERATION_SERVICE, &IID_IMFVideoSampleAllocator,
+            (void **)&allocator);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFVideoSampleAllocator_QueryInterface(allocator, &IID_IMFVideoSampleAllocatorCallback, (void **)&allocator_callback);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    sample_count = 0;
+    hr = IMFVideoSampleAllocatorCallback_GetFreeSampleCount(allocator_callback, &sample_count);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(!sample_count, "Unexpected sample count %d.\n", sample_count);
+
+    hr = IMFVideoSampleAllocator_AllocateSample(allocator, &sample);
+    ok(hr == MF_E_NOT_INITIALIZED, "Unexpected hr %#x.\n", hr);
+
+    IMFVideoSampleAllocatorCallback_Release(allocator_callback);
+    IMFVideoSampleAllocator_Release(allocator);
+
+    /* Same test for a substream. */
+    hr = IMFMediaSink_AddStreamSink(sink, 1, NULL, &stream_sink2);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = MFGetService((IUnknown *)stream_sink2, &MR_VIDEO_ACCELERATION_SERVICE, &IID_IMFVideoSampleAllocator,
+            (void **)&allocator);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IMFVideoSampleAllocator_Release(allocator);
+
+    hr = IMFMediaSink_RemoveStreamSink(sink, 1);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    IMFStreamSink_Release(stream_sink2);
 
     hr = IMFMediaSink_GetCharacteristics(sink, &flags);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
@@ -3546,6 +3698,7 @@ static BOOL is_sample_copier_available_type(IMFMediaType *type)
 
 static void test_sample_copier(void)
 {
+    IMFAttributes *attributes, *attributes2;
     DWORD in_min, in_max, out_min, out_max;
     IMFMediaType *mediatype, *mediatype2;
     MFT_OUTPUT_STREAM_INFO output_info;
@@ -3554,9 +3707,9 @@ static void test_sample_copier(void)
     DWORD input_count, output_count;
     MFT_OUTPUT_DATA_BUFFER buffer;
     IMFMediaBuffer *media_buffer;
-    IMFAttributes *attributes;
+    DWORD count, flags, status;
     IMFTransform *copier;
-    DWORD flags, status;
+    UINT32 value;
     HRESULT hr;
 
     hr = MFCreateSampleCopierMFT(&copier);
@@ -3564,6 +3717,16 @@ static void test_sample_copier(void)
 
     hr = IMFTransform_GetAttributes(copier, &attributes);
     ok(hr == S_OK, "Failed to get transform attributes, hr %#x.\n", hr);
+    hr = IMFTransform_GetAttributes(copier, &attributes2);
+    ok(hr == S_OK, "Failed to get transform attributes, hr %#x.\n", hr);
+    ok(attributes == attributes2, "Unexpected instance.\n");
+    IMFAttributes_Release(attributes2);
+    hr = IMFAttributes_GetCount(attributes, &count);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(count == 1, "Unexpected attribute count %u.\n", count);
+    hr = IMFAttributes_GetUINT32(attributes, &MFT_SUPPORT_DYNAMIC_FORMAT_CHANGE, &value);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(!!value, "Unexpected value %u.\n", value);
     IMFAttributes_Release(attributes);
 
     hr = IMFTransform_GetInputStreamAttributes(copier, 0, &attributes);
@@ -3798,6 +3961,108 @@ static void test_sample_copier(void)
     IMFTransform_Release(copier);
 }
 
+static void sample_copier_process(IMFTransform *copier, IMFMediaBuffer *input_buffer,
+        IMFMediaBuffer *output_buffer)
+{
+    IMFSample *input_sample, *output_sample;
+    MFT_OUTPUT_DATA_BUFFER buffer;
+    DWORD status;
+    HRESULT hr;
+
+    hr = MFCreateSample(&input_sample);
+    ok(hr == S_OK, "Failed to create a sample, hr %#x.\n", hr);
+
+    hr = MFCreateSample(&output_sample);
+    ok(hr == S_OK, "Failed to create a sample, hr %#x.\n", hr);
+
+    hr = IMFSample_AddBuffer(input_sample, input_buffer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFSample_AddBuffer(output_sample, output_buffer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFTransform_ProcessInput(copier, 0, input_sample, 0);
+    ok(hr == S_OK, "Failed to process input, hr %#x.\n", hr);
+
+    status = 0;
+    memset(&buffer, 0, sizeof(buffer));
+    buffer.pSample = output_sample;
+    hr = IMFTransform_ProcessOutput(copier, 0, 1, &buffer, &status);
+    ok(hr == S_OK, "Failed to get output, hr %#x.\n", hr);
+
+    IMFSample_Release(input_sample);
+    IMFSample_Release(output_sample);
+}
+
+static void test_sample_copier_output_processing(void)
+{
+    IMFMediaBuffer *input_buffer, *output_buffer;
+    MFT_OUTPUT_STREAM_INFO output_info;
+    IMFMediaType *mediatype;
+    IMFTransform *copier;
+    DWORD max_length;
+    HRESULT hr;
+    BYTE *ptr;
+
+    hr = MFCreateSampleCopierMFT(&copier);
+    ok(hr == S_OK, "Failed to create sample copier, hr %#x.\n", hr);
+
+    /* Configure for 16 x 16 of D3DFMT_X8R8G8B8. */
+    hr = MFCreateMediaType(&mediatype);
+    ok(hr == S_OK, "Failed to create media type, hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetGUID(mediatype, &MF_MT_MAJOR_TYPE, &MFMediaType_Video);
+    ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetGUID(mediatype, &MF_MT_SUBTYPE, &MFVideoFormat_RGB32);
+    ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetUINT64(mediatype, &MF_MT_FRAME_SIZE, ((UINT64)16) << 32 | 16);
+    ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
+
+    hr = IMFTransform_SetInputType(copier, 0, mediatype, 0);
+    ok(hr == S_OK, "Failed to set input type, hr %#x.\n", hr);
+
+    hr = IMFTransform_SetOutputType(copier, 0, mediatype, 0);
+    ok(hr == S_OK, "Failed to set input type, hr %#x.\n", hr);
+
+    /* Source and destination are linear buffers, destination is twice as large. */
+    hr = IMFTransform_GetOutputStreamInfo(copier, 0, &output_info);
+    ok(hr == S_OK, "Failed to get output info, hr %#x.\n", hr);
+
+    hr = MFCreateAlignedMemoryBuffer(output_info.cbSize, output_info.cbAlignment, &output_buffer);
+    ok(hr == S_OK, "Failed to create media buffer, hr %#x.\n", hr);
+
+    hr = IMFMediaBuffer_Lock(output_buffer, &ptr, &max_length, NULL);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    memset(ptr, 0xcc, max_length);
+    hr = IMFMediaBuffer_Unlock(output_buffer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = MFCreateAlignedMemoryBuffer(output_info.cbSize, output_info.cbAlignment, &input_buffer);
+    ok(hr == S_OK, "Failed to create media buffer, hr %#x.\n", hr);
+
+    hr = IMFMediaBuffer_Lock(input_buffer, &ptr, &max_length, NULL);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    memset(ptr, 0xaa, max_length);
+    hr = IMFMediaBuffer_Unlock(input_buffer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFMediaBuffer_SetCurrentLength(input_buffer, 4);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    sample_copier_process(copier, input_buffer, output_buffer);
+
+    hr = IMFMediaBuffer_Lock(output_buffer, &ptr, &max_length, NULL);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(ptr[0] == 0xaa && ptr[4] == 0xcc, "Unexpected buffer contents.\n");
+
+    hr = IMFMediaBuffer_Unlock(output_buffer);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    IMFMediaType_Release(mediatype);
+    IMFTransform_Release(copier);
+}
+
 static void test_MFGetTopoNodeCurrentType(void)
 {
     IMFMediaType *media_type, *media_type2;
@@ -3897,5 +4162,6 @@ START_TEST(mf)
     test_MFGetSupportedMimeTypes();
     test_MFGetSupportedSchemes();
     test_sample_copier();
+    test_sample_copier_output_processing();
     test_MFGetTopoNodeCurrentType();
 }

@@ -585,6 +585,8 @@ static BOOL has_output_pins(IBaseFilter *filter)
 
 static void update_seeking(struct filter *filter)
 {
+    IMediaSeeking *seeking;
+
     if (!filter->seeking)
     {
         /* The Legend of Heroes: Trails of Cold Steel II destroys its filter when
@@ -593,8 +595,13 @@ static void update_seeking(struct filter *filter)
          * Some filters (e.g. MediaStreamFilter) can become seekable when they are
          * already in the graph, so always try to query IMediaSeeking if it's not
          * cached yet. */
-        if (FAILED(IBaseFilter_QueryInterface(filter->filter, &IID_IMediaSeeking, (void **)&filter->seeking)))
-            filter->seeking = NULL;
+        if (SUCCEEDED(IBaseFilter_QueryInterface(filter->filter, &IID_IMediaSeeking, (void **)&seeking)))
+        {
+            if (IMediaSeeking_IsFormatSupported(seeking, &TIME_FORMAT_MEDIA_TIME) == S_OK)
+                filter->seeking = seeking;
+            else
+                IMediaSeeking_Release(seeking);
+        }
     }
 }
 
@@ -1830,7 +1837,6 @@ static void CALLBACK async_run_cb(TP_CALLBACK_INSTANCE *instance, void *context,
     }
 
     LeaveCriticalSection(&graph->cs);
-    IUnknown_Release(graph->outer_unk);
 }
 
 static HRESULT WINAPI MediaControl_Run(IMediaControl *iface)
@@ -1890,7 +1896,6 @@ static HRESULT WINAPI MediaControl_Run(IMediaControl *iface)
             if (!graph->async_run_work)
                 graph->async_run_work = CreateThreadpoolWork(async_run_cb, graph, NULL);
             graph->needs_async_run = 1;
-            IUnknown_AddRef(graph->outer_unk);
             SubmitThreadpoolWork(graph->async_run_work);
         }
         else
@@ -2331,7 +2336,7 @@ static HRESULT WINAPI MediaSeeking_GetCurrentPosition(IMediaSeeking *iface, LONG
     {
         ret = graph->stream_stop;
     }
-    else if (graph->state == State_Running && graph->refClock)
+    else if (graph->state == State_Running && !graph->needs_async_run && graph->refClock)
     {
         REFERENCE_TIME time;
         IReferenceClock_GetTime(graph->refClock, &time);
@@ -5001,9 +5006,8 @@ static HRESULT WINAPI MediaFilter_Stop(IMediaFilter *iface)
 
     LeaveCriticalSection(&graph->cs);
 
-    /* Don't cancel the callback; it's holding a reference to the graph. */
     if (work)
-        WaitForThreadpoolWorkCallbacks(work, FALSE);
+        WaitForThreadpoolWorkCallbacks(work, TRUE);
 
     return hr;
 }
@@ -5052,9 +5056,8 @@ static HRESULT WINAPI MediaFilter_Pause(IMediaFilter *iface)
 
     LeaveCriticalSection(&graph->cs);
 
-    /* Don't cancel the callback; it's holding a reference to the graph. */
     if (work)
-        WaitForThreadpoolWorkCallbacks(work, FALSE);
+        WaitForThreadpoolWorkCallbacks(work, TRUE);
 
     return hr;
 }

@@ -1001,6 +1001,9 @@
 /* Define to 1 if you have the <sys/cdio.h> header file. */
 #undef HAVE_SYS_CDIO_H
 
+/* Define to 1 if you have the <sys/conf.h> header file. */
+#undef HAVE_SYS_CONF_H
+
 /* Define to 1 if you have the <sys/epoll.h> header file. */
 #undef HAVE_SYS_EPOLL_H
 
@@ -1342,9 +1345,6 @@
 
 /* Define to the soname of the libGLESv2 library. */
 #undef SONAME_LIBGLESV2
-
-/* Define to the soname of the libGLU library. */
-#undef SONAME_LIBGLU
 
 /* Define to the soname of the libgnutls library. */
 #undef SONAME_LIBGNUTLS

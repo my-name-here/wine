@@ -49,7 +49,6 @@ AC_ARG_WITH(gettext,   AS_HELP_STRING([--without-gettext],[do not use gettext]))
 AC_ARG_WITH(gettextpo, AS_HELP_STRING([--with-gettextpo],[use the GetTextPO library to rebuild po files]),
             [if test "x$withval" = "xno"; then ac_cv_header_gettext_po_h=no; fi])
 AC_ARG_WITH(gphoto,    AS_HELP_STRING([--without-gphoto],[do not use gphoto (Digital Camera support)]))
-AC_ARG_WITH(glu,       AS_HELP_STRING([--without-glu],[do not use the GLU library]))
 AC_ARG_WITH(gnutls,    AS_HELP_STRING([--without-gnutls],[do not use GnuTLS (schannel support)]))
 AC_ARG_WITH(gsm,       AS_HELP_STRING([--without-gsm],[do not use libgsm (GSM 06.10 codec support)]),
             [if test "x$withval" = "xno"; then ac_cv_header_gsm_h=no; ac_cv_header_gsm_gsm_h=no; fi])
@@ -540,7 +539,7 @@ AC_HEADER_STAT()
 
 dnl **** Checks for headers that depend on other ones ****
 
-AC_CHECK_HEADERS([sys/mount.h sys/statfs.h sys/user.h sys/vfs.h],,,
+AC_CHECK_HEADERS([sys/conf.h sys/mount.h sys/statfs.h sys/user.h sys/vfs.h],,,
     [#include <sys/types.h>
      #ifdef HAVE_SYS_PARAM_H
      # include <sys/param.h>
@@ -723,8 +722,6 @@ case $host_os in
     esac
     dnl Disable modules that can't be used on Windows
     enable_iphlpapi=${enable_iphlpapi:-no}
-    enable_kernel32=${enable_kernel32:-no}
-    enable_ntdll=${enable_ntdll:-no}
     enable_ws2_32=${enable_ws2_32:-no}
     enable_loader=${enable_loader:-no}
     enable_server=${enable_server:-no}
@@ -1294,13 +1291,6 @@ This probably prevents linking to OpenGL. Try deleting the file and restarting c
                             fi],
 			    $X_LIBS -lm $X_EXTRA_LIBS -dylib_file /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib:/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib)],
 		     $X_LIBS -lm $X_EXTRA_LIBS)
-        if test "x$with_glu" != "xno"
-        then
-            WINE_CHECK_SONAME(GLU,gluLookAt,,,[$OPENGL_LIBS $X_LIBS -lm $X_EXTRA_LIBS])
-            WINE_NOTICE_WITH(glu,[test "x$ac_cv_lib_soname_GLU" = "x"],
-                             [libGLU ${notice_platform}development files not found, GLU won't be supported.])
-        fi
-
         if test "x$with_osmesa" != "xno"
         then
             WINE_CHECK_SONAME(OSMesa,OSMesaGetProcAddress,,,[$X_LIBS -lm $X_EXTRA_LIBS])
@@ -2053,6 +2043,32 @@ then
 char*f(const char *h,char n) {return strchr(h,n);}]])],[ac_cv_c_logicalop_noisy=no],[ac_cv_c_logicalop_noisy=yes]))
       CFLAGS=$saved_string_h_CFLAGS
       test "$ac_cv_c_logicalop_noisy" = yes || EXTRACFLAGS="$EXTRACFLAGS -Wlogical-op"])
+
+  dnl Check for 64-bit compare-and-swap
+  AC_CACHE_CHECK([for flags needed for 64-bit compare-and-swap support], wine_cv_64bit_compare_swap,
+      [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#ifndef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
+#error no
+#endif]])],
+          [wine_cv_64bit_compare_swap="none needed"],
+          [case $host_cpu in
+            *i[[3456]]86*) wine_cv_64bit_compare_swap="-march=i586" ;;
+            *arm*)         wine_cv_64bit_compare_swap="-march=armv7-a" ;;
+            *)             wine_cv_64bit_compare_swap="unknown" ;;
+           esac
+           if test "x$wine_cv_64bit_compare_swap" != xunknown
+           then
+               dnl try with the new flags
+               CFLAGS="$CFLAGS $wine_cv_64bit_compare_swap"
+               AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#ifndef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
+#error no
+#endif]])],,[wine_cv_64bit_compare_swap="unknown"])
+               CFLAGS=$saved_CFLAGS
+           fi])])
+  case "$wine_cv_64bit_compare_swap" in
+      unknown) AC_MSG_ERROR([gcc doesn't support 64-bit compare-and-swap on this platform]) ;;
+      "none needed") ;;
+      *) EXTRACFLAGS="$EXTRACFLAGS $wine_cv_64bit_compare_swap" ;;
+  esac
 
   dnl Default to dwarf-2 debug info
   for ac_flag in $CFLAGS; do
@@ -3082,6 +3098,7 @@ WINE_CONFIG_MAKEFILE(dlls/compstui)
 WINE_CONFIG_MAKEFILE(dlls/comsvcs)
 WINE_CONFIG_MAKEFILE(dlls/comsvcs/tests)
 WINE_CONFIG_MAKEFILE(dlls/concrt140)
+WINE_CONFIG_MAKEFILE(dlls/concrt140/tests)
 WINE_CONFIG_MAKEFILE(dlls/connect)
 WINE_CONFIG_MAKEFILE(dlls/credui)
 WINE_CONFIG_MAKEFILE(dlls/credui/tests)
@@ -3113,6 +3130,7 @@ WINE_CONFIG_MAKEFILE(dlls/d3d12)
 WINE_CONFIG_MAKEFILE(dlls/d3d12/tests)
 WINE_CONFIG_MAKEFILE(dlls/d3d8)
 WINE_CONFIG_MAKEFILE(dlls/d3d8/tests)
+WINE_CONFIG_MAKEFILE(dlls/d3d8thk)
 WINE_CONFIG_MAKEFILE(dlls/d3d9)
 WINE_CONFIG_MAKEFILE(dlls/d3d9/tests)
 WINE_CONFIG_MAKEFILE(dlls/d3dcompiler_33)
@@ -3131,6 +3149,7 @@ WINE_CONFIG_MAKEFILE(dlls/d3dcompiler_46)
 WINE_CONFIG_MAKEFILE(dlls/d3dcompiler_47)
 WINE_CONFIG_MAKEFILE(dlls/d3dcompiler_47/tests)
 WINE_CONFIG_MAKEFILE(dlls/d3dim)
+WINE_CONFIG_MAKEFILE(dlls/d3dim700)
 WINE_CONFIG_MAKEFILE(dlls/d3drm)
 WINE_CONFIG_MAKEFILE(dlls/d3drm/tests)
 WINE_CONFIG_MAKEFILE(dlls/d3dx10_33)
@@ -3548,6 +3567,7 @@ WINE_CONFIG_MAKEFILE(dlls/netcfgx/tests)
 WINE_CONFIG_MAKEFILE(dlls/netio.sys)
 WINE_CONFIG_MAKEFILE(dlls/netprofm)
 WINE_CONFIG_MAKEFILE(dlls/netprofm/tests)
+WINE_CONFIG_MAKEFILE(dlls/netutils)
 WINE_CONFIG_MAKEFILE(dlls/newdev)
 WINE_CONFIG_MAKEFILE(dlls/ninput)
 WINE_CONFIG_MAKEFILE(dlls/ninput/tests)
@@ -3697,6 +3717,7 @@ WINE_CONFIG_MAKEFILE(dlls/sound.drv16,enable_win16)
 WINE_CONFIG_MAKEFILE(dlls/spoolss)
 WINE_CONFIG_MAKEFILE(dlls/spoolss/tests)
 WINE_CONFIG_MAKEFILE(dlls/srclient)
+WINE_CONFIG_MAKEFILE(dlls/srvcli)
 WINE_CONFIG_MAKEFILE(dlls/sspicli)
 WINE_CONFIG_MAKEFILE(dlls/stdole2.tlb)
 WINE_CONFIG_MAKEFILE(dlls/stdole32.tlb)
@@ -3790,6 +3811,7 @@ WINE_CONFIG_MAKEFILE(dlls/webservices/tests)
 WINE_CONFIG_MAKEFILE(dlls/wer)
 WINE_CONFIG_MAKEFILE(dlls/wer/tests)
 WINE_CONFIG_MAKEFILE(dlls/wevtapi)
+WINE_CONFIG_MAKEFILE(dlls/wevtsvc)
 WINE_CONFIG_MAKEFILE(dlls/wiaservc)
 WINE_CONFIG_MAKEFILE(dlls/wiaservc/tests)
 WINE_CONFIG_MAKEFILE(dlls/wimgapi)
@@ -3890,6 +3912,7 @@ WINE_CONFIG_MAKEFILE(dlls/xactengine3_4)
 WINE_CONFIG_MAKEFILE(dlls/xactengine3_5)
 WINE_CONFIG_MAKEFILE(dlls/xactengine3_6)
 WINE_CONFIG_MAKEFILE(dlls/xactengine3_7)
+WINE_CONFIG_MAKEFILE(dlls/xactengine3_7/tests)
 WINE_CONFIG_MAKEFILE(dlls/xapofx1_1)
 WINE_CONFIG_MAKEFILE(dlls/xapofx1_2)
 WINE_CONFIG_MAKEFILE(dlls/xapofx1_3)
@@ -3939,7 +3962,9 @@ WINE_CONFIG_MAKEFILE(programs/conhost/tests)
 WINE_CONFIG_MAKEFILE(programs/control)
 WINE_CONFIG_MAKEFILE(programs/cscript)
 WINE_CONFIG_MAKEFILE(programs/dism)
+WINE_CONFIG_MAKEFILE(programs/dplaysvr)
 WINE_CONFIG_MAKEFILE(programs/dpnsvr)
+WINE_CONFIG_MAKEFILE(programs/dpvsetup)
 WINE_CONFIG_MAKEFILE(programs/dxdiag)
 WINE_CONFIG_MAKEFILE(programs/eject)
 WINE_CONFIG_MAKEFILE(programs/expand)

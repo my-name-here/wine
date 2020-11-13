@@ -119,16 +119,22 @@ int CDECL MSVCRT_towlower(MSVCRT_wint_t c)
 
 INT CDECL MSVCRT__wcsicmp_l(const MSVCRT_wchar_t *str1, const MSVCRT_wchar_t *str2, MSVCRT__locale_t locale)
 {
+    MSVCRT__locale_tstruct tmp = {0};
     MSVCRT_wchar_t c1, c2;
 
     if(!MSVCRT_CHECK_PMT(str1 != NULL) || !MSVCRT_CHECK_PMT(str2 != NULL))
         return MSVCRT__NLSCMPERROR;
+
+    if(!locale)
+        locale = get_current_locale_noalloc(&tmp);
 
     do
     {
         c1 = MSVCRT__towlower_l(*str1++, locale);
         c2 = MSVCRT__towlower_l(*str2++, locale);
     } while(c1 && (c1 == c2));
+
+    free_locale_noalloc(&tmp);
     return c1 - c2;
 }
 
@@ -146,19 +152,25 @@ INT CDECL MSVCRT__wcsicmp( const MSVCRT_wchar_t* str1, const MSVCRT_wchar_t* str
 INT CDECL MSVCRT__wcsnicmp_l(const MSVCRT_wchar_t *str1, const MSVCRT_wchar_t *str2,
         MSVCRT_size_t n, MSVCRT__locale_t locale)
 {
+    MSVCRT__locale_tstruct tmp = {0};
     MSVCRT_wchar_t c1, c2;
 
     if (!n)
-            return 0;
+        return 0;
 
     if(!MSVCRT_CHECK_PMT(str1 != NULL) || !MSVCRT_CHECK_PMT(str2 != NULL))
         return MSVCRT__NLSCMPERROR;
+
+    if(!locale)
+        locale = get_current_locale_noalloc(&tmp);
 
     do
     {
         c1 = MSVCRT__towlower_l(*str1++, locale);
         c2 = MSVCRT__towlower_l(*str2++, locale);
     } while(--n && c1 && (c1 == c2));
+
+    free_locale_noalloc(&tmp);
     return c1 - c2;
 }
 
@@ -343,6 +355,7 @@ MSVCRT_wchar_t* CDECL MSVCRT__wcsset( MSVCRT_wchar_t* str, MSVCRT_wchar_t c )
 int CDECL MSVCRT__wcsupr_s_l( MSVCRT_wchar_t* str, MSVCRT_size_t n,
    MSVCRT__locale_t locale )
 {
+  MSVCRT__locale_tstruct tmp = {0};
   MSVCRT_wchar_t* ptr = str;
 
   if (!str || !n)
@@ -352,12 +365,21 @@ int CDECL MSVCRT__wcsupr_s_l( MSVCRT_wchar_t* str, MSVCRT_size_t n,
     return MSVCRT_EINVAL;
   }
 
+  if(!locale)
+    locale = get_current_locale_noalloc(&tmp);
+
   while (n--)
   {
-    if (!*ptr) return 0;
+    if (!*ptr)
+    {
+      free_locale_noalloc(&tmp);
+      return 0;
+    }
     *ptr = MSVCRT__towupper_l(*ptr, locale);
     ptr++;
   }
+
+  free_locale_noalloc(&tmp);
 
   /* MSDN claims that the function should return and set errno to
    * ERANGE, which doesn't seem to be true based on the tests. */
@@ -397,6 +419,7 @@ MSVCRT_wchar_t* CDECL MSVCRT__wcsupr( MSVCRT_wchar_t *str )
  */
 int CDECL MSVCRT__wcslwr_s_l( MSVCRT_wchar_t* str, MSVCRT_size_t n, MSVCRT__locale_t locale )
 {
+  MSVCRT__locale_tstruct tmp = {0};
   MSVCRT_wchar_t* ptr = str;
 
   if (!str || !n)
@@ -406,12 +429,21 @@ int CDECL MSVCRT__wcslwr_s_l( MSVCRT_wchar_t* str, MSVCRT_size_t n, MSVCRT__loca
     return MSVCRT_EINVAL;
   }
 
+  if(!locale)
+    locale = get_current_locale_noalloc(&tmp);
+
   while (n--)
   {
-    if (!*ptr) return 0;
+    if (!*ptr)
+    {
+      free_locale_noalloc(&tmp);
+      return 0;
+    }
     *ptr = MSVCRT__towlower_l(*ptr, locale);
     ptr++;
   }
+
+  free_locale_noalloc(&tmp);
 
   /* MSDN claims that the function should return and set errno to
    * ERANGE, which doesn't seem to be true based on the tests. */
@@ -545,7 +577,8 @@ static MSVCRT_size_t MSVCRT_wcsrtombs_l(char *mbstr, const MSVCRT_wchar_t **wcst
 {
     MSVCRT_pthreadlocinfo locinfo;
     MSVCRT_size_t tmp = 0;
-    BOOL used_default;
+    BOOL used_default = FALSE;
+    BOOL *pused_default;
 
     if(!locale)
         locinfo = get_locinfo();
@@ -570,9 +603,11 @@ static MSVCRT_size_t MSVCRT_wcsrtombs_l(char *mbstr, const MSVCRT_wchar_t **wcst
         return i;
     }
 
+    pused_default = (locinfo->lc_codepage != CP_UTF8 ? &used_default : NULL);
+
     if(!mbstr) {
         tmp = WideCharToMultiByte(locinfo->lc_codepage, WC_NO_BEST_FIT_CHARS,
-                *wcstr, -1, NULL, 0, NULL, &used_default);
+                *wcstr, -1, NULL, 0, NULL, pused_default);
         if(!tmp || used_default) {
             *MSVCRT__errno() = MSVCRT_EILSEQ;
             return -1;
@@ -585,7 +620,7 @@ static MSVCRT_size_t MSVCRT_wcsrtombs_l(char *mbstr, const MSVCRT_wchar_t **wcst
         MSVCRT_size_t i, size;
 
         size = WideCharToMultiByte(locinfo->lc_codepage, WC_NO_BEST_FIT_CHARS,
-                *wcstr, 1, buf, 3, NULL, &used_default);
+                *wcstr, 1, buf, 3, NULL, pused_default);
         if(!size || used_default) {
             *MSVCRT__errno() = MSVCRT_EILSEQ;
             return -1;
@@ -1902,7 +1937,8 @@ int CDECL MSVCRT__wctomb_s_l(int *len, char *mbchar, MSVCRT_size_t size,
         MSVCRT_wchar_t wch, MSVCRT__locale_t locale)
 {
     MSVCRT_pthreadlocinfo locinfo;
-    BOOL error;
+    BOOL error = FALSE;
+    BOOL *perror;
     int mblen;
 
     if(!mbchar && size>0) {
@@ -1939,7 +1975,8 @@ int CDECL MSVCRT__wctomb_s_l(int *len, char *mbchar, MSVCRT_size_t size,
         return 0;
     }
 
-    mblen = WideCharToMultiByte(locinfo->lc_codepage, 0, &wch, 1, mbchar, size, NULL, &error);
+    perror = (locinfo->lc_codepage != CP_UTF8 ? &error : NULL);
+    mblen = WideCharToMultiByte(locinfo->lc_codepage, 0, &wch, 1, mbchar, size, NULL, perror);
     if(!mblen || error) {
         if(!mblen && GetLastError()==ERROR_INSUFFICIENT_BUFFER) {
             if(mbchar && size>0)
@@ -1991,15 +2028,18 @@ INT CDECL MSVCRT_wctomb( char *dst, MSVCRT_wchar_t ch )
 INT CDECL MSVCRT_wctob( MSVCRT_wint_t wchar )
 {
     char out;
-    BOOL error;
+    BOOL error = FALSE;
+    BOOL *perror;
     UINT codepage = get_locinfo()->lc_codepage;
+
+    perror = (codepage != CP_UTF8 ? &error : NULL);
 
     if(!codepage) {
         if (wchar < 0xff)
             return (signed char)wchar;
         else
             return MSVCRT_EOF;
-    } else if(WideCharToMultiByte( codepage, 0, &wchar, 1, &out, 1, NULL, &error ) && !error)
+    } else if(WideCharToMultiByte( codepage, 0, &wchar, 1, &out, 1, NULL, perror ) && !error)
         return (INT)out;
     return MSVCRT_EOF;
 }

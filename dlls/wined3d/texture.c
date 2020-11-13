@@ -505,17 +505,14 @@ static void texture2d_depth_blt_fbo(const struct wined3d_device *device, struct 
     if (gl_mask & GL_DEPTH_BUFFER_BIT)
     {
         gl_info->gl_ops.gl.p_glDepthMask(GL_TRUE);
-        context_invalidate_state(context, STATE_RENDER(WINED3D_RS_ZWRITEENABLE));
+        context_invalidate_state(context, STATE_DEPTH_STENCIL);
     }
     if (gl_mask & GL_STENCIL_BUFFER_BIT)
     {
         if (gl_info->supported[EXT_STENCIL_TWO_SIDE])
-        {
             gl_info->gl_ops.gl.p_glDisable(GL_STENCIL_TEST_TWO_SIDE_EXT);
-            context_invalidate_state(context, STATE_RENDER(WINED3D_RS_TWOSIDEDSTENCILMODE));
-        }
         gl_info->gl_ops.gl.p_glStencilMask(~0U);
-        context_invalidate_state(context, STATE_RENDER(WINED3D_RS_STENCILWRITEMASK));
+        context_invalidate_state(context, STATE_DEPTH_STENCIL);
     }
 
     gl_info->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
@@ -5389,12 +5386,9 @@ static void ffp_blitter_clear_rendertargets(struct wined3d_device *device, unsig
     if (flags & WINED3DCLEAR_STENCIL)
     {
         if (gl_info->supported[EXT_STENCIL_TWO_SIDE])
-        {
             gl_info->gl_ops.gl.p_glDisable(GL_STENCIL_TEST_TWO_SIDE_EXT);
-            context_invalidate_state(context, STATE_RENDER(WINED3D_RS_TWOSIDEDSTENCILMODE));
-        }
         gl_info->gl_ops.gl.p_glStencilMask(~0u);
-        context_invalidate_state(context, STATE_RENDER(WINED3D_RS_STENCILWRITEMASK));
+        context_invalidate_state(context, STATE_DEPTH_STENCIL);
         gl_info->gl_ops.gl.p_glClearStencil(stencil);
         checkGLcall("glClearStencil");
         clear_mask = clear_mask | GL_STENCIL_BUFFER_BIT;
@@ -5403,7 +5397,7 @@ static void ffp_blitter_clear_rendertargets(struct wined3d_device *device, unsig
     if (flags & WINED3DCLEAR_ZBUFFER)
     {
         gl_info->gl_ops.gl.p_glDepthMask(GL_TRUE);
-        context_invalidate_state(context, STATE_RENDER(WINED3D_RS_ZWRITEENABLE));
+        context_invalidate_state(context, STATE_DEPTH_STENCIL);
         gl_info->gl_ops.gl.p_glClearDepth(depth);
         checkGLcall("glClearDepth");
         clear_mask = clear_mask | GL_DEPTH_BUFFER_BIT;

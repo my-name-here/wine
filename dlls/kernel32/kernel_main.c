@@ -18,10 +18,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "config.h"
-#include "wine/port.h"
-
-#include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <string.h>
@@ -34,7 +30,6 @@
 #include "winternl.h"
 
 #include "kernel_private.h"
-#include "console_private.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(process);
@@ -131,9 +126,6 @@ static BOOL process_attach( HMODULE module )
     RtlSetUnhandledExceptionFilter( UnhandledExceptionFilter );
 
     NtQuerySystemInformation( SystemBasicInformation, &system_info, sizeof(system_info), NULL );
-
-    /* Setup computer name */
-    COMPUTERNAME_Init();
 
     CONSOLE_Init(params);
 

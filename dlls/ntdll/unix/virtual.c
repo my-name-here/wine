@@ -2437,56 +2437,6 @@ void virtual_init(void)
 
 
 /***********************************************************************
- *             virtual_map_ntdll
- *
- * Map ntdll, used instead of virtual_map_section() because some things are not initialized yet.
- */
-NTSTATUS virtual_map_ntdll( int fd, void **module )
-{
-    IMAGE_DOS_HEADER dos;
-    IMAGE_NT_HEADERS nt;
-    NTSTATUS status;
-    SIZE_T size;
-    void *base;
-    unsigned int vprot;
-    struct file_view *view;
-
-    /* load the headers */
-
-    size = pread( fd, &dos, sizeof(dos), 0 );
-    if (size < sizeof(dos)) return STATUS_INVALID_IMAGE_FORMAT;
-    if (dos.e_magic != IMAGE_DOS_SIGNATURE) return STATUS_INVALID_IMAGE_FORMAT;
-
-    size = pread( fd, &nt, sizeof(nt), dos.e_lfanew );
-    if (size < sizeof(nt)) return STATUS_INVALID_IMAGE_PROTECT;
-    if (nt.Signature != IMAGE_NT_SIGNATURE) return STATUS_INVALID_IMAGE_FORMAT;
-    if (nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR_MAGIC) return STATUS_INVALID_IMAGE_FORMAT;
-#ifdef __i386__
-    if (nt.FileHeader.Machine != IMAGE_FILE_MACHINE_I386) return STATUS_INVALID_IMAGE_FORMAT;
-#elif defined(__x86_64__)
-    if (nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) return STATUS_INVALID_IMAGE_FORMAT;
-#elif defined(__arm__)
-    if (nt.FileHeader.Machine != IMAGE_FILE_MACHINE_ARM &&
-        nt.FileHeader.Machine != IMAGE_FILE_MACHINE_THUMB &&
-        nt.FileHeader.Machine != IMAGE_FILE_MACHINE_ARMNT) return STATUS_INVALID_IMAGE_FORMAT;
-#elif defined(__aarch64__)
-    if (nt.FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64) return STATUS_INVALID_IMAGE_FORMAT;
-#endif
-
-    base  = (void *)nt.OptionalHeader.ImageBase;
-    size  = ROUND_SIZE( 0, nt.OptionalHeader.SizeOfImage );
-    vprot = SEC_IMAGE | SEC_FILE | VPROT_COMMITTED | VPROT_READ | VPROT_EXEC | VPROT_WRITECOPY;
-
-    status = map_view( &view, base, size, FALSE, vprot, 0 );
-    if (status == STATUS_CONFLICTING_ADDRESSES)
-        ERR( "couldn't load ntdll at preferred address %p\n", base );
-    if (status) return status;
-    *module = view->base;
-    return map_image_into_view( view, fd, base, nt.OptionalHeader.SizeOfHeaders, 0, -1, FALSE );
-}
-
-
-/***********************************************************************
  *           get_system_affinity_mask
  */
 ULONG_PTR get_system_affinity_mask(void)
@@ -2641,7 +2591,7 @@ TEB *virtual_alloc_first_teb(void)
     NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&ptr, 0, &block_size, MEM_COMMIT, PAGE_READWRITE );
     NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&peb, 0, &peb_size, MEM_COMMIT, PAGE_READWRITE );
     init_teb( teb, peb );
-    *(ULONG_PTR *)peb->Reserved = get_image_address();
+    *(ULONG_PTR *)&peb->CloudFileFlags = get_image_address();
     return teb;
 }
 
@@ -3500,6 +3450,21 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
         *size_ptr = size;
     }
     return status;
+}
+
+/***********************************************************************
+ *             NtAllocateVirtualMemoryEx   (NTDLL.@)
+ *             ZwAllocateVirtualMemoryEx   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *size_ptr, ULONG type,
+                                           ULONG protect, MEM_EXTENDED_PARAMETER *parameters,
+                                           ULONG count )
+{
+    if (count && !parameters) return STATUS_INVALID_PARAMETER;
+
+    if (count) FIXME( "Ignoring %d extended parameters %p\n", count, parameters );
+
+    return NtAllocateVirtualMemory( process, ret, 0, size_ptr, type, protect );
 }
 
 

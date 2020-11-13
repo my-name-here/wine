@@ -131,6 +131,7 @@ static statement_t *link_statements(statement_t*,statement_t*);
 %token <dbl> tDouble
 
 %type <statement> Statement SimpleStatement StatementNl StatementsNl StatementsNl_opt BodyStatements IfStatement Else_opt
+%type <statement> GlobalDimDeclaration
 %type <expression> Expression LiteralExpression PrimaryExpression EqualityExpression CallExpression ExpressionNl_opt
 %type <expression> ConcatExpression AdditiveExpression ModExpression IntdivExpression MultiplicativeExpression ExpExpression
 %type <expression> NotExpression UnaryExpression AndExpression OrExpression XorExpression EqvExpression SignExpression
@@ -161,8 +162,14 @@ OptionExplicit_opt
 
 SourceElements
     : /* empty */
+    | SourceElements GlobalDimDeclaration StSep
+                                            { source_add_statement(ctx, $2); }
     | SourceElements StatementNl            { source_add_statement(ctx, $2); }
     | SourceElements ClassDeclaration       { source_add_class(ctx, $2); }
+
+GlobalDimDeclaration
+    : tPRIVATE DimDeclList                  { $$ = new_dim_statement(ctx, @$, $2); CHECK_ERROR; }
+    | tPUBLIC  DimDeclList                  { $$ = new_dim_statement(ctx, @$, $2); CHECK_ERROR; }
 
 ExpressionNl_opt
     : /* empty */                           { $$ = NULL; }
@@ -445,11 +452,11 @@ ClassBody
     | PropertyDecl StSep ClassBody                { $$ = add_class_function(ctx, $3, $1); CHECK_ERROR; }
 
 PropertyDecl
-    : Storage_opt tPROPERTY tGET tIdentifier ArgumentsDecl_opt StSep BodyStatements tEND tPROPERTY
+    : Storage_opt tPROPERTY tGET Identifier ArgumentsDecl_opt StSep BodyStatements tEND tPROPERTY
                                     { $$ = new_function_decl(ctx, $4, FUNC_PROPGET, $1, $5, $7); CHECK_ERROR; }
-    | Storage_opt tPROPERTY tLET tIdentifier '(' ArgumentDecl ')' StSep BodyStatements tEND tPROPERTY
+    | Storage_opt tPROPERTY tLET Identifier '(' ArgumentDecl ')' StSep BodyStatements tEND tPROPERTY
                                     { $$ = new_function_decl(ctx, $4, FUNC_PROPLET, $1, $6, $9); CHECK_ERROR; }
-    | Storage_opt tPROPERTY tSET tIdentifier '(' ArgumentDecl ')' StSep BodyStatements tEND tPROPERTY
+    | Storage_opt tPROPERTY tSET Identifier '(' ArgumentDecl ')' StSep BodyStatements tEND tPROPERTY
                                     { $$ = new_function_decl(ctx, $4, FUNC_PROPSET, $1, $6, $9); CHECK_ERROR; }
 
 FunctionDecl
@@ -483,11 +490,11 @@ ArgumentDecl
 /* these keywords may also be an identifier, depending on context */
 Identifier
     : tIdentifier    { $$ = $1; }
-    | tDEFAULT       { $$ = $1; }
-    | tERROR         { $$ = $1; }
-    | tEXPLICIT      { $$ = $1; }
-    | tPROPERTY      { $$ = $1; }
-    | tSTEP          { $$ = $1; }
+    | tDEFAULT       { ctx->last_token = tIdentifier; $$ = $1; }
+    | tERROR         { ctx->last_token = tIdentifier; $$ = $1; }
+    | tEXPLICIT      { ctx->last_token = tIdentifier; $$ = $1; }
+    | tPROPERTY      { ctx->last_token = tIdentifier; $$ = $1; }
+    | tSTEP          { ctx->last_token = tIdentifier; $$ = $1; }
 
 /* Most statements accept both new line and ':' as separators */
 StSep
@@ -983,10 +990,11 @@ static function_decl_t *new_function_decl(parser_ctx_t *ctx, const WCHAR *name, 
         unsigned storage_flags, arg_decl_t *arg_decl, statement_t *body)
 {
     function_decl_t *decl;
+    BOOL is_default = FALSE;
 
     if(storage_flags & STORAGE_IS_DEFAULT) {
-        if(type == FUNC_PROPGET) {
-            type = FUNC_DEFGET;
+        if(type == FUNC_PROPGET || type == FUNC_FUNCTION || type == FUNC_SUB) {
+            is_default = TRUE;
         }else {
             FIXME("Invalid default property\n");
             ctx->hres = E_FAIL;
@@ -1001,6 +1009,7 @@ static function_decl_t *new_function_decl(parser_ctx_t *ctx, const WCHAR *name, 
     decl->name = name;
     decl->type = type;
     decl->is_public = !(storage_flags & STORAGE_IS_PRIVATE);
+    decl->is_default = is_default;
     decl->args = arg_decl;
     decl->body = body;
     decl->next = NULL;

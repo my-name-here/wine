@@ -22,8 +22,11 @@
 #define __WINE_WINE_AFD_H
 
 #include <winioctl.h>
+#include "wine/server_protocol.h"
 
 #define IOCTL_AFD_CREATE                    CTL_CODE(FILE_DEVICE_NETWORK, 200, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_AFD_ACCEPT                    CTL_CODE(FILE_DEVICE_NETWORK, 201, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_AFD_ACCEPT_INTO               CTL_CODE(FILE_DEVICE_NETWORK, 202, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 #define IOCTL_AFD_ADDRESS_LIST_CHANGE       CTL_CODE(FILE_DEVICE_NETWORK, 323, METHOD_BUFFERED, 0)
 
@@ -31,6 +34,12 @@ struct afd_create_params
 {
     int family, type, protocol;
     unsigned int flags;
+};
+
+struct afd_accept_into_params
+{
+    obj_handle_t accept_handle;
+    unsigned int recv_len, local_len;
 };
 
 #endif
