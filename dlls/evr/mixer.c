@@ -1222,10 +1222,25 @@ static void video_mixer_render(struct video_mixer *mixer, IDirect3DSurface9 *rt)
     IDirect3DSurface9_Release(surface);
 }
 
+static HRESULT video_mixer_get_sample_desired_time(IMFSample *sample, LONGLONG *timestamp, LONGLONG *duration)
+{
+    IMFDesiredSample *desired;
+    HRESULT hr;
+
+    if (SUCCEEDED(hr = IMFSample_QueryInterface(sample, &IID_IMFDesiredSample, (void **)&desired)))
+    {
+        hr = IMFDesiredSample_GetDesiredSampleTimeAndDuration(desired, timestamp, duration);
+        IMFDesiredSample_Release(desired);
+    }
+
+    return hr;
+}
+
 static HRESULT WINAPI video_mixer_transform_ProcessOutput(IMFTransform *iface, DWORD flags, DWORD count,
         MFT_OUTPUT_DATA_BUFFER *buffers, DWORD *status)
 {
     struct video_mixer *mixer = impl_from_IMFTransform(iface);
+    LONGLONG timestamp, duration;
     IDirect3DSurface9 *surface;
     IDirect3DDevice9 *device;
     unsigned int i;
@@ -1257,7 +1272,18 @@ static HRESULT WINAPI video_mixer_transform_ProcessOutput(IMFTransform *iface, D
             }
 
             if (SUCCEEDED(hr))
+            {
                 video_mixer_render(mixer, surface);
+
+                timestamp = duration = 0;
+                if (SUCCEEDED(IMFSample_GetSampleTime(mixer->inputs[0].sample, &timestamp)))
+                {
+                    IMFSample_SetSampleTime(buffers->pSample, timestamp);
+
+                    IMFSample_GetSampleDuration(mixer->inputs[0].sample, &duration);
+                    IMFSample_SetSampleDuration(buffers->pSample, duration);
+                }
+            }
 
             if (SUCCEEDED(hr))
             {
@@ -1272,12 +1298,17 @@ static HRESULT WINAPI video_mixer_transform_ProcessOutput(IMFTransform *iface, D
         }
         else
         {
-            if (SUCCEEDED(hr = video_mixer_get_d3d_device(mixer, &device)))
+            if (SUCCEEDED(video_mixer_get_sample_desired_time(buffers->pSample, &timestamp, &duration)))
             {
-                IDirect3DDevice9_ColorFill(device, surface, NULL, 0);
-                IDirect3DDeviceManager9_UnlockDevice(mixer->device_manager, mixer->device_handle, FALSE);
-                IDirect3DDevice9_Release(device);
+                if (SUCCEEDED(hr = video_mixer_get_d3d_device(mixer, &device)))
+                {
+                    IDirect3DDevice9_ColorFill(device, surface, NULL, 0);
+                    IDirect3DDeviceManager9_UnlockDevice(mixer->device_manager, mixer->device_handle, FALSE);
+                    IDirect3DDevice9_Release(device);
+                }
             }
+            else
+                hr = MF_E_TRANSFORM_NEED_MORE_INPUT;
         }
         IDirect3DSurface9_Release(surface);
     }
@@ -1619,11 +1650,13 @@ static HRESULT WINAPI video_mixer_getservice_GetService(IMFGetService *iface, RE
         {
             return IMFGetService_QueryInterface(iface, riid, obj);
         }
+
+        return E_NOINTERFACE;
     }
 
     FIXME("Unsupported service %s, riid %s.\n", debugstr_guid(service), debugstr_guid(riid));
 
-    return E_NOTIMPL;
+    return MF_E_UNSUPPORTED_SERVICE;
 }
 
 static const IMFGetServiceVtbl video_mixer_getservice_vtbl =
@@ -2207,7 +2240,7 @@ static ULONG WINAPI video_mixer_quality_advise_AddRef(IMFQualityAdvise *iface)
     return IMFTransform_AddRef(&mixer->IMFTransform_iface);
 }
 
-static ULONG WINAPI video_mixer_quality_Release(IMFQualityAdvise *iface)
+static ULONG WINAPI video_mixer_quality_advise_Release(IMFQualityAdvise *iface)
 {
     struct video_mixer *mixer = impl_from_IMFQualityAdvise(iface);
     return IMFTransform_Release(&mixer->IMFTransform_iface);
@@ -2252,7 +2285,7 @@ static const IMFQualityAdviseVtbl video_mixer_quality_advise_vtbl =
 {
     video_mixer_quality_advise_QueryInterface,
     video_mixer_quality_advise_AddRef,
-    video_mixer_quality_Release,
+    video_mixer_quality_advise_Release,
     video_mixer_quality_advise_SetDropMode,
     video_mixer_quality_advise_SetQualityLevel,
     video_mixer_quality_advise_GetDropMode,

@@ -18,14 +18,20 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  *
  *
- * For functions copied from musl (http://www.musl-libc.org/):
+ * For functions copied from musl libc (http://musl.libc.org/):
  * ====================================================
- * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ * Copyright 2005-2020 Rich Felker, et al.
  *
- * Developed at SunPro, a Sun Microsystems, Inc. business.
- * Permission to use, copy, modify, and distribute this
- * software is freely granted, provided that this notice
- * is preserved.
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
  * ====================================================
  */
 
@@ -46,18 +52,6 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
-
-#ifndef HAVE_FINITE
-#define finite(x) isfinite(x)
-#endif
-#ifndef HAVE_FINITEF
-#define finitef(x) isfinite(x)
-#endif
-
-/* FIXME: Does not work with -NAN and -0. */
-#ifndef signbit
-#define signbit(x) ((x) < 0)
-#endif
 
 #define _DOMAIN         1       /* domain error in argument */
 #define _SING           2       /* singularity */
@@ -170,18 +164,22 @@ int CDECL MSVCRT__set_FMA3_enable(int flag)
  */
 float CDECL MSVCRT__chgsignf( float num )
 {
-    /* FIXME: +-infinity,Nan not tested */
-    return -num;
+    union { float f; UINT32 i; } u = { num };
+    u.i ^= 0x80000000;
+    return u.f;
 }
 
 /*********************************************************************
  *      _copysignf (MSVCRT.@)
+ *
+ * Copied from musl: src/math/copysignf.c
  */
-float CDECL MSVCRT__copysignf( float num, float sign )
+float CDECL MSVCRT__copysignf( float x, float y )
 {
-    if (signbit(sign))
-        return signbit(num) ? num : -num;
-    return signbit(num) ? -num : num;
+    union { float f; UINT32 i; } ux = { x }, uy = { y };
+    ux.i &= 0x7fffffff;
+    ux.i |= uy.i & 0x80000000;
+    return ux.f;
 }
 
 /*********************************************************************
@@ -189,7 +187,7 @@ float CDECL MSVCRT__copysignf( float num, float sign )
  */
 float CDECL MSVCRT__nextafterf( float num, float next )
 {
-    if (!finitef(num) || !finitef(next)) *MSVCRT__errno() = MSVCRT_EDOM;
+    if (!isfinite(num) || !isfinite(next)) *MSVCRT__errno() = MSVCRT_EDOM;
     return nextafterf( num, next );
 }
 
@@ -209,22 +207,43 @@ float CDECL MSVCRT__logbf( float num )
 #ifndef __i386__
 
 /*********************************************************************
+ *      _fpclassf (MSVCRT.@)
+ */
+int CDECL MSVCRT__fpclassf( float num )
+{
+    union { float f; UINT32 i; } u = { num };
+    int e = u.i >> 23 & 0xff;
+    int s = u.i >> 31;
+
+    switch (e)
+    {
+    case 0:
+        if (u.i << 1) return s ? MSVCRT__FPCLASS_ND : MSVCRT__FPCLASS_PD;
+        return s ? MSVCRT__FPCLASS_NZ : MSVCRT__FPCLASS_PZ;
+    case 0xff:
+        if (u.i << 9) return ((u.i >> 22) & 1) ? MSVCRT__FPCLASS_QNAN : MSVCRT__FPCLASS_SNAN;
+        return s ? MSVCRT__FPCLASS_NINF : MSVCRT__FPCLASS_PINF;
+    default:
+        return s ? MSVCRT__FPCLASS_NN : MSVCRT__FPCLASS_PN;
+    }
+}
+
+/*********************************************************************
  *      _finitef (MSVCRT.@)
  */
 int CDECL MSVCRT__finitef( float num )
 {
-    return finitef(num) != 0; /* See comment for _isnan() */
+    union { float f; UINT32 i; } u = { num };
+    return (u.i & 0x7fffffff) < 0x7f800000;
 }
 
 /*********************************************************************
  *      _isnanf (MSVCRT.@)
  */
-INT CDECL MSVCRT__isnanf( float num )
+int CDECL MSVCRT__isnanf( float num )
 {
-    /* Some implementations return -1 for true(glibc), msvcrt/crtdll return 1.
-     * Do the same, as the result may be used in calculations
-     */
-    return isnan(num) != 0;
+    union { float f; UINT32 i; } u = { num };
+    return (u.i & 0x7fffffff) > 0x7f800000;
 }
 
 /*********************************************************************
@@ -262,7 +281,7 @@ float CDECL MSVCRT_acosf( float x )
                 return 2 * pio2_lo + 2 * pio2_hi + 7.5231638453e-37;
             return 0;
         }
-        if (MSVCRT__isnanf(x)) return x;
+        if (isnan(x)) return x;
         return math_error(_DOMAIN, "acosf", x, 0, 0 / (x - x));
     }
     /* |x| < 0.5 */
@@ -320,7 +339,7 @@ float CDECL MSVCRT_asinf( float x )
     if (ix >= 0x3f800000) {  /* |x| >= 1 */
         if (ix == 0x3f800000)  /* |x| == 1 */
             return x * pio2 + 7.5231638453e-37;  /* asin(+-1) = +-pi/2 with inexact */
-        if (MSVCRT__isnanf(x)) return x;
+        if (isnan(x)) return x;
         return math_error(_DOMAIN, "asinf", x, 0, 0 / (x - x));
     }
     if (ix < 0x3f000000) {  /* |x| < 0.5 */
@@ -370,14 +389,14 @@ float CDECL MSVCRT_atanf( float x )
     int id;
 
 #if _MSVCR_VER == 0
-    if (MSVCRT__isnanf(x)) return math_error(_DOMAIN, "atanf", x, 0, x);
+    if (isnan(x)) return math_error(_DOMAIN, "atanf", x, 0, x);
 #endif
 
     ix = *(unsigned int*)&x;
     sign = ix >> 31;
     ix &= 0x7fffffff;
     if (ix >= 0x4c800000) {  /* if |x| >= 2**26 */
-        if (MSVCRT__isnanf(x))
+        if (isnan(x))
             return x;
         z = atanhi[3] + 7.5231638453e-37;
         return sign ? -z : z;
@@ -435,7 +454,7 @@ float CDECL MSVCRT_atan2f( float y, float x )
     float z;
     unsigned int m, ix, iy;
 
-    if (MSVCRT__isnanf(x) || MSVCRT__isnanf(y))
+    if (isnan(x) || isnan(y))
         return x + y;
     ix = *(unsigned int*)&x;
     iy = *(unsigned int*)&y;
@@ -499,7 +518,7 @@ float CDECL MSVCRT_atan2f( float y, float x )
 float CDECL MSVCRT_cosf( float x )
 {
   float ret = cosf(x);
-  if (!finitef(x)) return math_error(_DOMAIN, "cosf", x, 0, ret);
+  if (!isfinite(x)) return math_error(_DOMAIN, "cosf", x, 0, ret);
   return ret;
 }
 
@@ -520,8 +539,8 @@ float CDECL MSVCRT_expf( float x )
 {
   float ret = expf(x);
   if (isnan(x)) return math_error(_DOMAIN, "expf", x, 0, ret);
-  if (finitef(x) && !ret) return math_error(_UNDERFLOW, "expf", x, 0, ret);
-  if (finitef(x) && !finitef(ret)) return math_error(_OVERFLOW, "expf", x, 0, ret);
+  if (isfinite(x) && !ret) return math_error(_UNDERFLOW, "expf", x, 0, ret);
+  if (isfinite(x) && !isfinite(ret)) return math_error(_OVERFLOW, "expf", x, 0, ret);
   return ret;
 }
 
@@ -531,7 +550,7 @@ float CDECL MSVCRT_expf( float x )
 float CDECL MSVCRT_fmodf( float x, float y )
 {
   float ret = fmodf(x, y);
-  if (!finitef(x) || !finitef(y)) return math_error(_DOMAIN, "fmodf", x, 0, ret);
+  if (!isfinite(x) || !isfinite(y)) return math_error(_DOMAIN, "fmodf", x, 0, ret);
   return ret;
 }
 
@@ -564,9 +583,9 @@ float CDECL MSVCRT_powf( float x, float y )
 {
   float z = powf(x,y);
   if (x < 0 && y != floorf(y)) return math_error(_DOMAIN, "powf", x, y, z);
-  if (!x && finitef(y) && y < 0) return math_error(_SING, "powf", x, y, z);
-  if (finitef(x) && finitef(y) && !finitef(z)) return math_error(_OVERFLOW, "powf", x, y, z);
-  if (x && finitef(x) && finitef(y) && !z) return math_error(_UNDERFLOW, "powf", x, y, z);
+  if (!x && isfinite(y) && y < 0) return math_error(_SING, "powf", x, y, z);
+  if (isfinite(x) && isfinite(y) && !isfinite(z)) return math_error(_OVERFLOW, "powf", x, y, z);
+  if (x && isfinite(x) && isfinite(y) && !z) return math_error(_UNDERFLOW, "powf", x, y, z);
   return z;
 }
 
@@ -576,7 +595,7 @@ float CDECL MSVCRT_powf( float x, float y )
 float CDECL MSVCRT_sinf( float x )
 {
   float ret = sinf(x);
-  if (!finitef(x)) return math_error(_DOMAIN, "sinf", x, 0, ret);
+  if (!isfinite(x)) return math_error(_DOMAIN, "sinf", x, 0, ret);
   return ret;
 }
 
@@ -668,7 +687,7 @@ float CDECL MSVCRT_sqrtf( float x )
 float CDECL MSVCRT_tanf( float x )
 {
   float ret = tanf(x);
-  if (!finitef(x)) return math_error(_DOMAIN, "tanf", x, 0, ret);
+  if (!isfinite(x)) return math_error(_DOMAIN, "tanf", x, 0, ret);
   return ret;
 }
 
@@ -678,7 +697,7 @@ float CDECL MSVCRT_tanf( float x )
 float CDECL MSVCRT_tanhf( float x )
 {
   float ret = tanhf(x);
-  if (!finitef(x)) return math_error(_DOMAIN, "tanhf", x, 0, ret);
+  if (!isfinite(x)) return math_error(_DOMAIN, "tanhf", x, 0, ret);
   return ret;
 }
 
@@ -692,10 +711,14 @@ float CDECL MSVCRT_ceilf( float x )
 
 /*********************************************************************
  *      fabsf (MSVCRT.@)
+ *
+ * Copied from musl: src/math/fabsf.c
  */
 float CDECL MSVCRT_fabsf( float x )
 {
-  return fabsf(x);
+    union { float f; UINT32 i; } u = { x };
+    u.i &= 0x7fffffff;
+    return u.f;
 }
 
 /*********************************************************************
@@ -1391,35 +1414,21 @@ __ASM_GLOBAL_FUNC(MSVCRT__ftol,
  */
 int CDECL MSVCRT__fpclass(double num)
 {
-#if defined(HAVE_FPCLASS) || defined(fpclass)
-  switch (fpclass( num ))
-  {
-  case FP_SNAN:  return MSVCRT__FPCLASS_SNAN;
-  case FP_QNAN:  return MSVCRT__FPCLASS_QNAN;
-  case FP_NINF:  return MSVCRT__FPCLASS_NINF;
-  case FP_PINF:  return MSVCRT__FPCLASS_PINF;
-  case FP_NDENORM: return MSVCRT__FPCLASS_ND;
-  case FP_PDENORM: return MSVCRT__FPCLASS_PD;
-  case FP_NZERO: return MSVCRT__FPCLASS_NZ;
-  case FP_PZERO: return MSVCRT__FPCLASS_PZ;
-  case FP_NNORM: return MSVCRT__FPCLASS_NN;
-  case FP_PNORM: return MSVCRT__FPCLASS_PN;
-  default: return MSVCRT__FPCLASS_PN;
-  }
-#elif defined (fpclassify)
-  switch (fpclassify( num ))
-  {
-  case FP_NAN: return MSVCRT__FPCLASS_QNAN;
-  case FP_INFINITE: return signbit(num) ? MSVCRT__FPCLASS_NINF : MSVCRT__FPCLASS_PINF;
-  case FP_SUBNORMAL: return signbit(num) ?MSVCRT__FPCLASS_ND : MSVCRT__FPCLASS_PD;
-  case FP_ZERO: return signbit(num) ? MSVCRT__FPCLASS_NZ : MSVCRT__FPCLASS_PZ;
-  }
-  return signbit(num) ? MSVCRT__FPCLASS_NN : MSVCRT__FPCLASS_PN;
-#else
-  if (!isfinite(num))
-    return MSVCRT__FPCLASS_QNAN;
-  return num == 0.0 ? MSVCRT__FPCLASS_PZ : (num < 0 ? MSVCRT__FPCLASS_NN : MSVCRT__FPCLASS_PN);
-#endif
+    union { double f; UINT64 i; } u = { num };
+    int e = u.i >> 52 & 0x7ff;
+    int s = u.i >> 63;
+
+    switch (e)
+    {
+    case 0:
+        if (u.i << 1) return s ? MSVCRT__FPCLASS_ND : MSVCRT__FPCLASS_PD;
+        return s ? MSVCRT__FPCLASS_NZ : MSVCRT__FPCLASS_PZ;
+    case 0x7ff:
+        if (u.i << 12) return ((u.i >> 51) & 1) ? MSVCRT__FPCLASS_QNAN : MSVCRT__FPCLASS_SNAN;
+        return s ? MSVCRT__FPCLASS_NINF : MSVCRT__FPCLASS_PINF;
+    default:
+        return s ? MSVCRT__FPCLASS_NN : MSVCRT__FPCLASS_PN;
+    }
 }
 
 /*********************************************************************
@@ -1599,10 +1608,14 @@ float CDECL MSVCRT_fmaf( float x, float y, float z )
 
 /*********************************************************************
  *		fabs (MSVCRT.@)
+ *
+ * Copied from musl: src/math/fabsf.c
  */
 double CDECL MSVCRT_fabs( double x )
 {
-  return fabs(x);
+    union { double f; UINT64 i; } u = { x };
+    u.i &= ~0ull >> 1;
+    return u.f;
 }
 
 /*********************************************************************
@@ -1779,8 +1792,9 @@ double CDECL MSVCRT__cabs(struct MSVCRT__complex num)
  */
 double CDECL MSVCRT__chgsign(double num)
 {
-  /* FIXME: +-infinity,Nan not tested */
-  return -num;
+    union { double f; UINT64 i; } u = { num };
+    u.i ^= 1ull << 63;
+    return u.f;
 }
 
 /*********************************************************************
@@ -2117,12 +2131,15 @@ int CDECL MSVCRT_fesetround(int round_mode)
 
 /*********************************************************************
  *		_copysign (MSVCRT.@)
+ *
+ * Copied from musl: src/math/copysign.c
  */
-double CDECL MSVCRT__copysign(double num, double sign)
+double CDECL MSVCRT__copysign( double x, double y )
 {
-  if (signbit(sign))
-    return signbit(num) ? num : -num;
-  return signbit(num) ? -num : num;
+    union { double f; UINT64 i; } ux = { x }, uy = { y };
+    ux.i &= ~0ull >> 1;
+    ux.i |= uy.i & 1ull << 63;
+    return ux.f;
 }
 
 /*********************************************************************
@@ -2130,7 +2147,8 @@ double CDECL MSVCRT__copysign(double num, double sign)
  */
 int CDECL MSVCRT__finite(double num)
 {
-  return isfinite(num) != 0; /* See comment for _isnan() */
+    union { double f; UINT64 i; } u = { num };
+    return (u.i & ~0ull >> 1) < 0x7ffull << 52;
 }
 
 /*********************************************************************
@@ -2224,12 +2242,10 @@ int CDECL MSVCRT_fesetenv(const MSVCRT_fenv_t *env)
 /*********************************************************************
  *		_isnan (MSVCRT.@)
  */
-INT CDECL MSVCRT__isnan(double num)
+int CDECL MSVCRT__isnan(double num)
 {
-  /* Some implementations return -1 for true(glibc), msvcrt/crtdll return 1.
-   * Do the same, as the result may be used in calculations
-   */
-  return isnan(num) != 0;
+    union { double f; UINT64 i; } u = { num };
+    return (u.i & ~0ull >> 1) > 0x7ffull << 52;
 }
 
 /*********************************************************************
@@ -3351,7 +3367,7 @@ float CDECL MSVCR120_exp2f(float x)
 {
 #ifdef HAVE_EXP2F
     float ret = exp2f(x);
-    if (finitef(x) && !finitef(ret)) *MSVCRT__errno() = MSVCRT_ERANGE;
+    if (isfinite(x) && !isfinite(ret)) *MSVCRT__errno() = MSVCRT_ERANGE;
     return ret;
 #else
     return MSVCR120_exp2(x);
@@ -3390,7 +3406,7 @@ float CDECL MSVCR120_expm1f(float x)
 #else
     float ret = exp(x) - 1;
 #endif
-    if (finitef(x) && !finitef(ret)) *MSVCRT__errno() = MSVCRT_ERANGE;
+    if (isfinite(x) && !isfinite(ret)) *MSVCRT__errno() = MSVCRT_ERANGE;
     return ret;
 }
 
@@ -3678,35 +3694,32 @@ LDOUBLE CDECL MSVCR120_truncl(LDOUBLE x)
 
 /*********************************************************************
  *      _dclass (MSVCR120.@)
+ *
+ * Copied from musl: src/math/__fpclassify.c
  */
 short CDECL MSVCR120__dclass(double x)
 {
-    switch (MSVCRT__fpclass(x)) {
-    case MSVCRT__FPCLASS_QNAN:
-    case MSVCRT__FPCLASS_SNAN:
-        return MSVCRT_FP_NAN;
-    case MSVCRT__FPCLASS_NINF:
-    case MSVCRT__FPCLASS_PINF:
-        return MSVCRT_FP_INFINITE;
-    case MSVCRT__FPCLASS_ND:
-    case MSVCRT__FPCLASS_PD:
-        return MSVCRT_FP_SUBNORMAL;
-    case MSVCRT__FPCLASS_NN:
-    case MSVCRT__FPCLASS_PN:
-    default:
-        return MSVCRT_FP_NORMAL;
-    case MSVCRT__FPCLASS_NZ:
-    case MSVCRT__FPCLASS_PZ:
-        return MSVCRT_FP_ZERO;
-    }
+    union { double f; UINT64 i; } u = { x };
+    int e = u.i >> 52 & 0x7ff;
+
+    if (!e) return u.i << 1 ? MSVCRT_FP_SUBNORMAL : MSVCRT_FP_ZERO;
+    if (e == 0x7ff) return (u.i << 12) ? MSVCRT_FP_NAN : MSVCRT_FP_INFINITE;
+    return MSVCRT_FP_NORMAL;
 }
 
 /*********************************************************************
  *      _fdclass (MSVCR120.@)
+ *
+ * Copied from musl: src/math/__fpclassifyf.c
  */
 short CDECL MSVCR120__fdclass(float x)
 {
-    return MSVCR120__dclass(x);
+    union { float f; UINT32 i; } u = { x };
+    int e = u.i >> 23 & 0xff;
+
+    if (!e) return u.i << 1 ? MSVCRT_FP_SUBNORMAL : MSVCRT_FP_ZERO;
+    if (e == 0xff) return u.i << 9 ? MSVCRT_FP_NAN : MSVCRT_FP_INFINITE;
+    return MSVCRT_FP_NORMAL;
 }
 
 /*********************************************************************
@@ -3730,7 +3743,7 @@ short CDECL MSVCR120__dtest(double *x)
  */
 short CDECL MSVCR120__fdtest(float *x)
 {
-    return MSVCR120__dclass(*x);
+    return MSVCR120__fdclass(*x);
 }
 
 /*********************************************************************
@@ -3870,7 +3883,8 @@ double CDECL MSVCR120_fdim(double x, double y)
  */
 int CDECL MSVCR120__fdsign(float x)
 {
-    return signbit(x) ? 0x8000 : 0;
+    union { float f; UINT32 i; } u = { x };
+    return (u.i >> 16) & 0x8000;
 }
 
 /*********************************************************************
@@ -3878,7 +3892,8 @@ int CDECL MSVCR120__fdsign(float x)
  */
 int CDECL MSVCR120__dsign(double x)
 {
-    return signbit(x) ? 0x8000 : 0;
+    union { double f; UINT64 i; } u = { x };
+    return (u.i >> 48) & 0x8000;
 }
 
 
@@ -4062,7 +4077,7 @@ float CDECL MSVCR120_atanhf(float x)
 
     ret = atanhf(x);
 
-    if (!finitef(ret)) *MSVCRT__errno() = MSVCRT_ERANGE;
+    if (!isfinite(ret)) *MSVCRT__errno() = MSVCRT_ERANGE;
     return ret;
 #else
     return MSVCR120_atanh(x);
@@ -4117,7 +4132,7 @@ double CDECL MSVCR120_remainder(double x, double y)
 {
 #ifdef HAVE_REMAINDER
     /* this matches 64-bit Windows.  32-bit Windows is slightly different */
-    if(!finite(x)) *MSVCRT__errno() = MSVCRT_EDOM;
+    if(!isfinite(x)) *MSVCRT__errno() = MSVCRT_EDOM;
     if(isnan(y) || y==0.0) *MSVCRT__errno() = MSVCRT_EDOM;
     return remainder(x, y);
 #else
@@ -4133,7 +4148,7 @@ float CDECL MSVCR120_remainderf(float x, float y)
 {
 #ifdef HAVE_REMAINDERF
     /* this matches 64-bit Windows.  32-bit Windows is slightly different */
-    if(!finitef(x)) *MSVCRT__errno() = MSVCRT_EDOM;
+    if(!isfinite(x)) *MSVCRT__errno() = MSVCRT_EDOM;
     if(isnan(y) || y==0.0f) *MSVCRT__errno() = MSVCRT_EDOM;
     return remainderf(x, y);
 #else
@@ -4156,7 +4171,7 @@ LDOUBLE CDECL MSVCR120_remainderl(LDOUBLE x, LDOUBLE y)
 double CDECL MSVCR120_remquo(double x, double y, int *quo)
 {
 #ifdef HAVE_REMQUO
-    if(!finite(x)) *MSVCRT__errno() = MSVCRT_EDOM;
+    if(!isfinite(x)) *MSVCRT__errno() = MSVCRT_EDOM;
     if(isnan(y) || y==0.0) *MSVCRT__errno() = MSVCRT_EDOM;
     return remquo(x, y, quo);
 #else
@@ -4171,7 +4186,7 @@ double CDECL MSVCR120_remquo(double x, double y, int *quo)
 float CDECL MSVCR120_remquof(float x, float y, int *quo)
 {
 #ifdef HAVE_REMQUOF
-    if(!finitef(x)) *MSVCRT__errno() = MSVCRT_EDOM;
+    if(!isfinite(x)) *MSVCRT__errno() = MSVCRT_EDOM;
     if(isnan(y) || y==0.0f) *MSVCRT__errno() = MSVCRT_EDOM;
     return remquof(x, y, quo);
 #else
@@ -4381,32 +4396,53 @@ double CDECL MSVCR120_creal(_Dcomplex z)
     return z.x;
 }
 
+/*********************************************************************
+ *      ilogb (MSVCR120.@)
+ *
+ * Copied from musl: src/math/ilogb.c
+ */
 int CDECL MSVCR120_ilogb(double x)
 {
-    if (!x) return MSVCRT_FP_ILOGB0;
-    if (isnan(x)) return MSVCRT_FP_ILOGBNAN;
-    if (isinf(x)) return MSVCRT_INT_MAX;
+    union { double f; UINT64 i; } u = { x };
+    int e = u.i >> 52 & 0x7ff;
 
-#ifdef HAVE_ILOGB
-    return ilogb(x);
-#else
-    return logb(x);
-#endif
+    if (!e)
+    {
+        u.i <<= 12;
+        if (u.i == 0) return MSVCRT_FP_ILOGB0;
+        /* subnormal x */
+        for (e = -0x3ff; u.i >> 63 == 0; e--, u.i <<= 1);
+        return e;
+    }
+    if (e == 0x7ff) return u.i << 12 ? MSVCRT_FP_ILOGBNAN : MSVCRT_INT_MAX;
+    return e - 0x3ff;
 }
 
+/*********************************************************************
+ *      ilogbf (MSVCR120.@)
+ *
+ * Copied from musl: src/math/ilogbf.c
+ */
 int CDECL MSVCR120_ilogbf(float x)
 {
-    if (!x) return MSVCRT_FP_ILOGB0;
-    if (isnan(x)) return MSVCRT_FP_ILOGBNAN;
-    if (isinf(x)) return MSVCRT_INT_MAX;
+    union { float f; UINT32 i; } u = { x };
+    int e = u.i >> 23 & 0xff;
 
-#ifdef HAVE_ILOGBF
-    return ilogbf(x);
-#else
-    return logbf(x);
-#endif
+    if (!e)
+    {
+        u.i <<= 9;
+        if (u.i == 0) return MSVCRT_FP_ILOGB0;
+        /* subnormal x */
+        for (e = -0x7f; u.i >> 31 == 0; e--, u.i <<= 1);
+        return e;
+    }
+    if (e == 0xff) return u.i << 9 ? MSVCRT_FP_ILOGBNAN : MSVCRT_INT_MAX;
+    return e - 0x7f;
 }
 
+/*********************************************************************
+ *      ilogbl (MSVCR120.@)
+ */
 int CDECL MSVCR120_ilogbl(LDOUBLE x)
 {
     return MSVCR120_ilogb(x);

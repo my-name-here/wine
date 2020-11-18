@@ -789,7 +789,7 @@ struct testpin
     IPin IPin_iface;
     LONG ref;
     PIN_DIRECTION dir;
-    IBaseFilter *filter;
+    struct testfilter *filter;
     IPin *peer;
     AM_MEDIA_TYPE *mt;
     WCHAR name[10];
@@ -801,9 +801,45 @@ struct testpin
     AM_MEDIA_TYPE *request_mt, *accept_mt;
     const struct testpin *require_connected_pin;
 
+    BOOL require_stopped_disconnect;
+
     HRESULT Connect_hr;
     HRESULT EnumMediaTypes_hr;
     HRESULT QueryInternalConnections_hr;
+};
+
+struct testfilter
+{
+    IBaseFilter IBaseFilter_iface;
+    LONG ref;
+    IFilterGraph *graph;
+    WCHAR *name;
+    IReferenceClock *clock;
+
+    IEnumPins IEnumPins_iface;
+    struct testpin *pins;
+    unsigned int pin_count, enum_idx;
+
+    FILTER_STATE state;
+    REFERENCE_TIME start_time;
+    HRESULT state_hr, GetState_hr, seek_hr;
+    FILTER_STATE expect_stop_prev, expect_run_prev;
+
+    IAMFilterMiscFlags IAMFilterMiscFlags_iface;
+    ULONG misc_flags;
+
+    IMediaSeeking IMediaSeeking_iface;
+    LONG seeking_ref;
+    DWORD seek_caps;
+    BOOL support_testguid, support_media_time;
+    GUID time_format;
+    LONGLONG seek_duration, seek_current, seek_stop;
+    double seek_rate;
+
+    IReferenceClock IReferenceClock_iface;
+
+    IFileSourceFilter IFileSourceFilter_iface;
+    WCHAR filename[MAX_PATH];
 };
 
 static inline struct testpin *impl_from_IEnumMediaTypes(IEnumMediaTypes *iface)
@@ -924,6 +960,9 @@ static HRESULT WINAPI testpin_Disconnect(IPin *iface)
     if (!pin->peer)
         return S_FALSE;
 
+    if (pin->require_stopped_disconnect && pin->filter->state != State_Stopped)
+        return VFW_E_NOT_STOPPED;
+
     IPin_Release(pin->peer);
     pin->peer = NULL;
     return S_OK;
@@ -954,8 +993,8 @@ static HRESULT WINAPI testpin_QueryPinInfo(IPin *iface, PIN_INFO *info)
     struct testpin *pin = impl_from_IPin(iface);
     if (winetest_debug > 1) trace("%p->QueryPinInfo()\n", pin);
 
-    info->pFilter = pin->filter;
-    IBaseFilter_AddRef(pin->filter);
+    info->pFilter = &pin->filter->IBaseFilter_iface;
+    IBaseFilter_AddRef(info->pFilter);
     info->dir = pin->dir;
     wcscpy(info->achName, pin->name);
     return S_OK;
@@ -1157,40 +1196,6 @@ static void testsource_init(struct testpin *pin, const AM_MEDIA_TYPE *types, int
     pin->types = types;
     pin->type_count = type_count;
 }
-
-struct testfilter
-{
-    IBaseFilter IBaseFilter_iface;
-    LONG ref;
-    IFilterGraph *graph;
-    WCHAR *name;
-    IReferenceClock *clock;
-
-    IEnumPins IEnumPins_iface;
-    struct testpin *pins;
-    unsigned int pin_count, enum_idx;
-
-    FILTER_STATE state;
-    REFERENCE_TIME start_time;
-    HRESULT state_hr, GetState_hr, seek_hr;
-    FILTER_STATE expect_stop_prev, expect_run_prev;
-
-    IAMFilterMiscFlags IAMFilterMiscFlags_iface;
-    ULONG misc_flags;
-
-    IMediaSeeking IMediaSeeking_iface;
-    LONG seeking_ref;
-    DWORD seek_caps;
-    BOOL support_testguid, support_media_time;
-    GUID time_format;
-    LONGLONG seek_duration, seek_current, seek_stop;
-    double seek_rate;
-
-    IReferenceClock IReferenceClock_iface;
-
-    IFileSourceFilter IFileSourceFilter_iface;
-    WCHAR filename[MAX_PATH];
-};
 
 static inline struct testfilter *impl_from_IEnumPins(IEnumPins *iface)
 {
@@ -1842,7 +1847,7 @@ static void testfilter_init(struct testfilter *filter, struct testpin *pins, int
     filter->pins = pins;
     filter->pin_count = pin_count;
     for (i = 0; i < pin_count; i++)
-        pins[i].filter = &filter->IBaseFilter_iface;
+        pins[i].filter = filter;
 
     filter->state = State_Stopped;
     filter->expect_stop_prev = filter->expect_run_prev = State_Paused;
@@ -2885,6 +2890,7 @@ static void test_connect_direct(void)
     struct testfilter source, sink, parser1, parser2;
 
     IFilterGraph2 *graph = create_graph();
+    IMediaControl *control;
     AM_MEDIA_TYPE mt;
     HRESULT hr;
 
@@ -2903,6 +2909,12 @@ static void test_connect_direct(void)
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
     hr = IFilterGraph2_AddFilter(graph, &sink.IBaseFilter_iface, NULL);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    /* The filter graph does not prevent connection while it is running; only
+     * individual filters do. */
+    IFilterGraph2_QueryInterface(graph, &IID_IMediaControl, (void **)&control);
+    hr = IMediaControl_Pause(control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
     hr = IFilterGraph2_ConnectDirect(graph, &source_pin.IPin_iface, &sink_pin.IPin_iface, NULL);
@@ -2998,6 +3010,14 @@ todo_wine
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
     /* Test Reconnect[Ex](). */
+
+    hr = IFilterGraph2_Reconnect(graph, &source_pin.IPin_iface);
+    todo_wine ok(hr == VFW_E_WRONG_STATE, "Got hr %#x.\n", hr);
+    hr = IFilterGraph2_Reconnect(graph, &sink_pin.IPin_iface);
+    todo_wine ok(hr == VFW_E_WRONG_STATE, "Got hr %#x.\n", hr);
+
+    hr = IMediaControl_Stop(control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
 
     hr = IFilterGraph2_Reconnect(graph, &source_pin.IPin_iface);
     ok(hr == VFW_E_NOT_CONNECTED, "Got hr %#x.\n", hr);
@@ -3097,17 +3117,35 @@ todo_wine
     ok(!source_pin.peer, "Got peer %p.\n", source_pin.peer);
     ok(!sink_pin.peer, "Got peer %p.\n", sink_pin.peer);
 
-    /* Or when the graph is destroyed. */
+    /* If the filter cannot be disconnected, then RemoveFilter() fails. */
+
     hr = IFilterGraph2_AddFilter(graph, &source.IBaseFilter_iface, NULL);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
-
-    hr = IFilterGraph2_ConnectDirect(graph, &source_pin.IPin_iface, &sink_pin.IPin_iface, NULL);
+    hr = IFilterGraph2_ConnectDirect(graph, &source_pin.IPin_iface, &sink_pin.IPin_iface, &mt);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
-    ok(source_pin.peer == &sink_pin.IPin_iface, "Got peer %p.\n", source_pin.peer);
-    ok(!source_pin.mt, "Got mt %p.\n", source_pin.mt);
-    ok(!sink_pin.peer, "Got peer %p.\n", sink_pin.peer);
-    IPin_AddRef(sink_pin.peer = &source_pin.IPin_iface);
+    sink_pin.peer = &source_pin.IPin_iface;
+    IPin_AddRef(sink_pin.peer);
+    hr = IMediaControl_Pause(control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
 
+    source_pin.require_stopped_disconnect = TRUE;
+    hr = IFilterGraph2_RemoveFilter(graph, &source.IBaseFilter_iface);
+    ok(hr == VFW_E_NOT_STOPPED, "Got hr %#x.\n", hr);
+    ok(source_pin.peer == &sink_pin.IPin_iface, "Got peer %p.\n", source_pin.peer);
+    ok(!sink_pin.peer, "Got peer %p.\n", sink_pin.peer);
+
+    sink_pin.peer = &source_pin.IPin_iface;
+    IPin_AddRef(sink_pin.peer);
+    source_pin.require_stopped_disconnect = FALSE;
+    sink_pin.require_stopped_disconnect = TRUE;
+    hr = IFilterGraph2_RemoveFilter(graph, &source.IBaseFilter_iface);
+    ok(hr == VFW_E_NOT_STOPPED, "Got hr %#x.\n", hr);
+    ok(source_pin.peer == &sink_pin.IPin_iface, "Got peer %p.\n", source_pin.peer);
+    ok(sink_pin.peer == &source_pin.IPin_iface, "Got peer %p.\n", sink_pin.peer);
+
+    /* Filters are stopped, and pins disconnected, when the graph is destroyed. */
+
+    IMediaControl_Release(control);
     hr = IFilterGraph2_Release(graph);
     ok(!hr, "Got outstanding refcount %d.\n", hr);
     ok(source.ref == 1, "Got outstanding refcount %d.\n", source.ref);
@@ -3231,9 +3269,6 @@ static void test_filter_state(void)
 
     IFilterGraph2_QueryInterface(graph, &IID_IMediaFilter, (void **)&filter);
     IFilterGraph2_QueryInterface(graph, &IID_IMediaControl, (void **)&control);
-
-    source_pin.filter = &source.IBaseFilter_iface;
-    sink_pin.filter = &sink.IBaseFilter_iface;
 
     IFilterGraph2_AddFilter(graph, &source.IBaseFilter_iface, NULL);
     IFilterGraph2_AddFilter(graph, &sink.IBaseFilter_iface, NULL);
@@ -3707,6 +3742,33 @@ todo_wine
 
     hr = IMediaControl_Stop(control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
+
+    /* Add and remove a filter while the graph is running. */
+
+    hr = IFilterGraph2_AddFilter(graph, &dummy.IBaseFilter_iface, L"dummy");
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(dummy.state == State_Stopped, "Got state %#x.\n", dummy.state);
+
+    hr = IMediaControl_Pause(control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    check_filter_state(graph, State_Paused);
+    ok(dummy.state == State_Paused, "Got state %#x.\n", dummy.state);
+
+    hr = IFilterGraph2_RemoveFilter(graph, &dummy.IBaseFilter_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(dummy.state == State_Paused, "Got state %#x.\n", dummy.state);
+
+    hr = IFilterGraph2_AddFilter(graph, &dummy.IBaseFilter_iface, L"dummy");
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(dummy.state == State_Paused, "Got state %#x.\n", dummy.state);
+
+    hr = IMediaControl_Stop(control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    check_filter_state(graph, State_Stopped);
+
+    hr = IFilterGraph2_RemoveFilter(graph, &dummy.IBaseFilter_iface);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(dummy.state == State_Stopped, "Got state %#x.\n", dummy.state);
 
     /* Destroying the graph while it's running stops all filters. */
 

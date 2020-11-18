@@ -102,7 +102,7 @@ static BOOL init_function_ptrs( void )
 }
 
 static const char machine[] = "dummy";
-static const WCHAR machineW[] = { 'd','u','m','m','y',0 };
+static const WCHAR machineW[] = L"dummy";
 
 /*  To do any real functionality testing with this suite you need a copy of
  *  the freely distributable standard RGB color space profile. It comes
@@ -119,12 +119,9 @@ static const char profile2[] =
 "\\spool\\drivers\\color\\srgb color space profile.icm";
 
 static const WCHAR profile1W[] =
-{ '\\','c','o','l','o','r','\\','s','r','g','b',' ','c','o','l','o','r',' ',
-  's','p','a','c','e',' ','p','r','o','f','i','l','e','.','i','c','m',0 };
+L"\\color\\srgb color space profile.icm";
 static const WCHAR profile2W[] =
-{ '\\','s','p','o','o','l','\\','d','r','i','v','e','r','s','\\',
-  'c','o','l','o','r','\\','s','r','g','b',' ','c','o','l','o','r',' ',
-  's','p','a','c','e',' ','p','r','o','f','i','l','e','.','i','c','m',0 };
+L"\\spool\\drivers\\color\\srgb color space profile.icm";
 
 static BOOL have_color_profile;
 
@@ -775,7 +772,6 @@ static void test_InstallColorProfileA( char *standardprofile, char *testprofile 
     {
         CHAR dest[MAX_PATH], base[MAX_PATH];
         DWORD size = sizeof(dest);
-        CHAR slash[] = "\\";
         HANDLE handle;
 
         SetLastError(0xdeadbeef);
@@ -792,7 +788,7 @@ static void test_InstallColorProfileA( char *standardprofile, char *testprofile 
 
         MSCMS_basenameA( testprofile, base );
 
-        lstrcatA( dest, slash );
+        lstrcatA( dest, "\\" );
         lstrcatA( dest, base );
 
         /* Check if the profile is really there */ 
@@ -832,7 +828,6 @@ static void test_InstallColorProfileW( WCHAR *standardprofileW, WCHAR *testprofi
     {
         WCHAR dest[MAX_PATH], base[MAX_PATH];
         DWORD size = sizeof(dest);
-        WCHAR slash[] = { '\\', 0 };
         HANDLE handle;
 
         SetLastError(0xdeadbeef);
@@ -849,7 +844,7 @@ static void test_InstallColorProfileW( WCHAR *standardprofileW, WCHAR *testprofi
 
         MSCMS_basenameW( testprofileW, base );
 
-        lstrcatW( dest, slash );
+        lstrcatW( dest, L"\\" );
         lstrcatW( dest, base );
 
         /* Check if the profile is really there */
@@ -1161,7 +1156,6 @@ static void test_UninstallColorProfileA( char *testprofile )
     {
         CHAR dest[MAX_PATH], base[MAX_PATH];
         DWORD size = sizeof(dest);
-        CHAR slash[] = "\\";
         HANDLE handle;
 
         SetLastError(0xdeadbeef);
@@ -1178,7 +1172,7 @@ static void test_UninstallColorProfileA( char *testprofile )
 
         MSCMS_basenameA( testprofile, base );
 
-        lstrcatA( dest, slash );
+        lstrcatA( dest, "\\" );
         lstrcatA( dest, base );
 
         ret = pUninstallColorProfileA( NULL, dest, TRUE );
@@ -1210,7 +1204,6 @@ static void test_UninstallColorProfileW( WCHAR *testprofileW )
         WCHAR dest[MAX_PATH], base[MAX_PATH];
         char destA[MAX_PATH];
         DWORD size = sizeof(dest);
-        WCHAR slash[] = { '\\', 0 };
         HANDLE handle;
         int bytes_copied;
 
@@ -1228,7 +1221,7 @@ static void test_UninstallColorProfileW( WCHAR *testprofileW )
 
         MSCMS_basenameW( testprofileW, base );
 
-        lstrcatW( dest, slash );
+        lstrcatW( dest, L"\\" );
         lstrcatW( dest, base );
 
         ret = pUninstallColorProfileW( NULL, dest, TRUE );

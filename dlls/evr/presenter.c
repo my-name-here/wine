@@ -48,6 +48,17 @@ enum presenter_flags
 enum streaming_thread_message
 {
     EVRM_STOP = WM_USER,
+    EVRM_PRESENT = WM_USER + 1,
+    EVRM_PROCESS_INPUT = WM_USER + 2,
+};
+
+struct sample_queue
+{
+    IMFSample **samples;
+    unsigned int size;
+    unsigned int used;
+    unsigned int front;
+    unsigned int back;
 };
 
 struct streaming_thread
@@ -55,6 +66,7 @@ struct streaming_thread
     HANDLE hthread;
     HANDLE ready_event;
     DWORD tid;
+    struct sample_queue queue;
 };
 
 struct video_presenter
@@ -66,6 +78,9 @@ struct video_presenter
     IMFRateSupport IMFRateSupport_iface;
     IMFGetService IMFGetService_iface;
     IMFVideoPositionMapper IMFVideoPositionMapper_iface;
+    IQualProp IQualProp_iface;
+    IMFQualityAdvise IMFQualityAdvise_iface;
+    IDirect3DDeviceManager9 IDirect3DDeviceManager9_iface;
     IMFVideoSampleAllocatorNotify allocator_cb;
     IUnknown IUnknown_inner;
     IUnknown *outer_unk;
@@ -76,9 +91,14 @@ struct video_presenter
     IMediaEventSink *event_sink;
 
     IDirect3DDeviceManager9 *device_manager;
+    IDirect3DSwapChain9 *swapchain;
+    HANDLE hdevice;
+
     IMFVideoSampleAllocator *allocator;
     struct streaming_thread thread;
+    unsigned int allocator_capacity;
     IMFMediaType *media_type;
+    LONGLONG frame_time_threshold;
     UINT reset_token;
     HWND video_window;
     MFVideoNormalizedRect src_rect;
@@ -137,6 +157,21 @@ static struct video_presenter *impl_from_IMFVideoSampleAllocatorNotify(IMFVideoS
     return CONTAINING_RECORD(iface, struct video_presenter, allocator_cb);
 }
 
+static struct video_presenter *impl_from_IQualProp(IQualProp *iface)
+{
+    return CONTAINING_RECORD(iface, struct video_presenter, IQualProp_iface);
+}
+
+static struct video_presenter *impl_from_IMFQualityAdvise(IMFQualityAdvise *iface)
+{
+    return CONTAINING_RECORD(iface, struct video_presenter, IMFQualityAdvise_iface);
+}
+
+static struct video_presenter *impl_from_IDirect3DDeviceManager9(IDirect3DDeviceManager9 *iface)
+{
+    return CONTAINING_RECORD(iface, struct video_presenter, IDirect3DDeviceManager9_iface);
+}
+
 static void video_presenter_notify_renderer(struct video_presenter *presenter,
         LONG event, LONG_PTR param1, LONG_PTR param2)
 {
@@ -156,6 +191,19 @@ static unsigned int get_gcd(unsigned int a, unsigned int b)
     }
 
     return a;
+}
+
+static HRESULT video_presenter_get_device(struct video_presenter *presenter, IDirect3DDevice9 **device)
+{
+    HRESULT hr;
+
+    if (!presenter->hdevice)
+    {
+        if (FAILED(hr = IDirect3DDeviceManager9_OpenDeviceHandle(presenter->device_manager, &presenter->hdevice)))
+            return hr;
+    }
+
+    return IDirect3DDeviceManager9_LockDevice(presenter->device_manager, presenter->hdevice, device, TRUE);
 }
 
 static void video_presenter_get_native_video_size(struct video_presenter *presenter)
@@ -227,10 +275,28 @@ static HRESULT video_presenter_set_media_type(struct video_presenter *presenter,
 
     video_presenter_reset_media_type(presenter);
 
-    if (SUCCEEDED(hr = IMFVideoSampleAllocator_InitializeSampleAllocator(presenter->allocator, 3, media_type)))
+    if (SUCCEEDED(hr = IMFVideoSampleAllocator_InitializeSampleAllocator(presenter->allocator,
+            presenter->allocator_capacity, media_type)))
     {
+        MFRatio ratio;
+        UINT64 rate, frametime;
+
         presenter->media_type = media_type;
         IMFMediaType_AddRef(presenter->media_type);
+
+        if (SUCCEEDED(IMFMediaType_GetUINT64(presenter->media_type, &MF_MT_FRAME_RATE, &rate)))
+        {
+            ratio.Denominator = rate;
+            ratio.Numerator = rate >> 32;
+        }
+        else
+        {
+            ratio.Denominator = 1;
+            ratio.Numerator = 30;
+        }
+
+        MFFrameRateToAverageTimePerFrame(ratio.Numerator, ratio.Denominator, &frametime);
+        presenter->frame_time_threshold = frametime / 4;
     }
     else
         WARN("Failed to initialize sample allocator, hr %#x.\n", hr);
@@ -269,81 +335,167 @@ static HRESULT video_presenter_invalidate_media_type(struct video_presenter *pre
     return hr;
 }
 
-static DWORD CALLBACK video_presenter_streaming_thread(void *arg)
+static void video_presenter_sample_queue_init(struct video_presenter *presenter)
 {
-    struct video_presenter *presenter = arg;
-    BOOL stop_thread = FALSE;
-    MSG msg;
+    struct sample_queue *queue = &presenter->thread.queue;
 
-    PeekMessageW(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+    if (queue->size)
+        return;
 
-    SetEvent(presenter->thread.ready_event);
+    memset(queue, 0, sizeof(*queue));
+    queue->samples = heap_calloc(presenter->allocator_capacity, sizeof(*queue->samples));
+    queue->size = presenter->allocator_capacity;
+    queue->back = queue->size - 1;
+}
 
-    while (!stop_thread)
+static void video_presenter_sample_queue_push(struct video_presenter *presenter, IMFSample *sample)
+{
+    struct sample_queue *queue = &presenter->thread.queue;
+
+    EnterCriticalSection(&presenter->cs);
+    if (queue->used != queue->size)
     {
-        MsgWaitForMultipleObjects(0, NULL, FALSE, INFINITE, QS_POSTMESSAGE);
+        queue->back = (queue->back + 1) % queue->size;
+        queue->samples[queue->back] = sample;
+        queue->used++;
+        IMFSample_AddRef(sample);
+    }
+    LeaveCriticalSection(&presenter->cs);
+}
 
-        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+static BOOL video_presenter_sample_queue_pop(struct video_presenter *presenter, IMFSample **sample)
+{
+    struct sample_queue *queue = &presenter->thread.queue;
+
+    EnterCriticalSection(&presenter->cs);
+    if (queue->used)
+    {
+        *sample = queue->samples[queue->front];
+        queue->front = (queue->front + 1) % queue->size;
+        queue->used--;
+    }
+    else
+        *sample = NULL;
+    LeaveCriticalSection(&presenter->cs);
+
+    return *sample != NULL;
+}
+
+static HRESULT video_presenter_get_sample_surface(IMFSample *sample, IDirect3DSurface9 **surface)
+{
+    IMFMediaBuffer *buffer;
+    IMFGetService *gs;
+    HRESULT hr;
+
+    if (FAILED(hr = IMFSample_GetBufferByIndex(sample, 0, &buffer)))
+        return hr;
+
+    hr = IMFMediaBuffer_QueryInterface(buffer, &IID_IMFGetService, (void **)&gs);
+    IMFMediaBuffer_Release(buffer);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IMFGetService_GetService(gs, &MR_BUFFER_SERVICE, &IID_IDirect3DSurface9, (void **)surface);
+    IMFGetService_Release(gs);
+    return hr;
+}
+
+static void video_presenter_sample_present(struct video_presenter *presenter, IMFSample *sample)
+{
+    IDirect3DSurface9 *surface, *backbuffer;
+    IDirect3DDevice9 *device;
+    HRESULT hr;
+
+    if (!presenter->swapchain)
+        return;
+
+    if (FAILED(hr = video_presenter_get_sample_surface(sample, &surface)))
+    {
+        WARN("Failed to get sample surface, hr %#x.\n", hr);
+        return;
+    }
+
+    if (FAILED(hr = IDirect3DSwapChain9_GetBackBuffer(presenter->swapchain, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
+    {
+        WARN("Failed to get a backbuffer, hr %#x.\n", hr);
+        IDirect3DSurface9_Release(surface);
+        return;
+    }
+
+    IDirect3DSwapChain9_GetDevice(presenter->swapchain, &device);
+    IDirect3DDevice9_StretchRect(device, surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+    IDirect3DSwapChain9_Present(presenter->swapchain, NULL, NULL, NULL, NULL, 0);
+
+    IDirect3DDevice9_Release(device);
+    IDirect3DSurface9_Release(backbuffer);
+    IDirect3DSurface9_Release(surface);
+}
+
+static void video_presenter_check_queue(struct video_presenter *presenter,
+        unsigned int *next_wait)
+{
+    LONGLONG pts, clocktime, delta;
+    unsigned int wait = 0;
+    BOOL present = TRUE;
+    IMFSample *sample;
+    MFTIME systime;
+    HRESULT hr;
+
+    while (video_presenter_sample_queue_pop(presenter, &sample))
+    {
+        wait = 0;
+
+        if (presenter->clock)
         {
-            switch (msg.message)
-            {
-                case EVRM_STOP:
-                    stop_thread = TRUE;
-                    break;
+            pts = clocktime = 0;
 
-                default:
-                    ;
+            hr = IMFSample_GetSampleTime(sample, &pts);
+            if (SUCCEEDED(hr))
+                hr = IMFClock_GetCorrelatedTime(presenter->clock, 0, &clocktime, &systime);
+
+            delta = pts - clocktime;
+            if (delta > 3 * presenter->frame_time_threshold)
+            {
+                /* Convert 100ns -> msec */
+                wait = (delta - 3 * presenter->frame_time_threshold) / 100000;
+                present = FALSE;
             }
         }
+
+        if (present)
+            video_presenter_sample_present(presenter, sample);
+        else
+            video_presenter_sample_queue_push(presenter, sample);
+
+        IMFSample_Release(sample);
+
+        if (wait > 0)
+            break;
     }
 
-    return 0;
+    if (!wait)
+        wait = INFINITE;
+
+    *next_wait = wait;
 }
 
-static HRESULT video_presenter_start_streaming(struct video_presenter *presenter)
+static void video_presenter_schedule_sample(struct video_presenter *presenter, IMFSample *sample)
 {
-    if (presenter->thread.hthread)
-        return S_OK;
-
-    if (!(presenter->thread.ready_event = CreateEventW(NULL, FALSE, FALSE, NULL)))
-        return HRESULT_FROM_WIN32(GetLastError());
-
-    if (!(presenter->thread.hthread = CreateThread(NULL, 0, video_presenter_streaming_thread,
-            presenter, 0, &presenter->thread.tid)))
+    if (!presenter->thread.tid)
     {
-        WARN("Failed to create streaming thread.\n");
-        CloseHandle(presenter->thread.ready_event);
-        presenter->thread.ready_event = NULL;
-        return E_FAIL;
+        WARN("Streaming thread hasn't been started.\n");
+        return;
     }
 
-    video_presenter_set_allocator_callback(presenter, &presenter->allocator_cb);
-
-    WaitForSingleObject(presenter->thread.ready_event, INFINITE);
-    CloseHandle(presenter->thread.ready_event);
-    presenter->thread.ready_event = NULL;
-
-    TRACE("Started streaming thread, tid %#x.\n", presenter->thread.tid);
-
-    return S_OK;
-}
-
-static HRESULT video_presenter_end_streaming(struct video_presenter *presenter)
-{
-    if (!presenter->thread.hthread)
-        return S_OK;
-
-    PostThreadMessageW(presenter->thread.tid, EVRM_STOP, 0, 0);
-
-    WaitForSingleObject(presenter->thread.hthread, INFINITE);
-    CloseHandle(presenter->thread.hthread);
-
-    TRACE("Terminated streaming thread tid %#x.\n", presenter->thread.tid);
-
-    memset(&presenter->thread, 0, sizeof(presenter->thread));
-    video_presenter_set_allocator_callback(presenter, NULL);
-
-    return S_OK;
+    if (presenter->clock)
+    {
+        video_presenter_sample_queue_push(presenter, sample);
+        PostThreadMessageW(presenter->thread.tid, EVRM_PRESENT, 0, 0);
+    }
+    else
+    {
+        video_presenter_sample_present(presenter, sample);
+    }
 }
 
 static HRESULT video_presenter_process_input(struct video_presenter *presenter)
@@ -397,10 +549,107 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
             if (buffer.pEvents)
                 IMFCollection_Release(buffer.pEvents);
 
-            /* FIXME: for now drop output sample back to the pool */
+            video_presenter_schedule_sample(presenter, sample);
+
             IMFSample_Release(sample);
         }
     }
+
+    return S_OK;
+}
+
+static DWORD CALLBACK video_presenter_streaming_thread(void *arg)
+{
+    struct video_presenter *presenter = arg;
+    unsigned int wait = INFINITE;
+    BOOL stop_thread = FALSE;
+    MSG msg;
+
+    PeekMessageW(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+
+    SetEvent(presenter->thread.ready_event);
+
+    while (!stop_thread)
+    {
+        if (MsgWaitForMultipleObjects(0, NULL, FALSE, wait, QS_POSTMESSAGE) == WAIT_TIMEOUT)
+            video_presenter_check_queue(presenter, &wait);
+
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            BOOL peek = TRUE;
+
+            switch (msg.message)
+            {
+                case EVRM_STOP:
+                    stop_thread = TRUE;
+                    break;
+
+                case EVRM_PRESENT:
+                    if (peek)
+                    {
+                        video_presenter_check_queue(presenter, &wait);
+                        peek = wait != INFINITE;
+                    }
+                    break;
+
+                case EVRM_PROCESS_INPUT:
+                    EnterCriticalSection(&presenter->cs);
+                    video_presenter_process_input(presenter);
+                    LeaveCriticalSection(&presenter->cs);
+                    break;
+                default:
+                    ;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static HRESULT video_presenter_start_streaming(struct video_presenter *presenter)
+{
+    if (presenter->thread.hthread)
+        return S_OK;
+
+    video_presenter_sample_queue_init(presenter);
+
+    if (!(presenter->thread.ready_event = CreateEventW(NULL, FALSE, FALSE, NULL)))
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    if (!(presenter->thread.hthread = CreateThread(NULL, 0, video_presenter_streaming_thread,
+            presenter, 0, &presenter->thread.tid)))
+    {
+        WARN("Failed to create streaming thread.\n");
+        CloseHandle(presenter->thread.ready_event);
+        presenter->thread.ready_event = NULL;
+        return E_FAIL;
+    }
+
+    video_presenter_set_allocator_callback(presenter, &presenter->allocator_cb);
+
+    WaitForSingleObject(presenter->thread.ready_event, INFINITE);
+    CloseHandle(presenter->thread.ready_event);
+    presenter->thread.ready_event = NULL;
+
+    TRACE("Started streaming thread, tid %#x.\n", presenter->thread.tid);
+
+    return S_OK;
+}
+
+static HRESULT video_presenter_end_streaming(struct video_presenter *presenter)
+{
+    if (!presenter->thread.hthread)
+        return S_OK;
+
+    PostThreadMessageW(presenter->thread.tid, EVRM_STOP, 0, 0);
+
+    WaitForSingleObject(presenter->thread.hthread, INFINITE);
+    CloseHandle(presenter->thread.hthread);
+
+    TRACE("Terminated streaming thread tid %#x.\n", presenter->thread.tid);
+
+    memset(&presenter->thread, 0, sizeof(presenter->thread));
+    video_presenter_set_allocator_callback(presenter, NULL);
 
     return S_OK;
 }
@@ -443,6 +692,18 @@ static HRESULT WINAPI video_presenter_inner_QueryInterface(IUnknown *iface, REFI
     else if (IsEqualIID(riid, &IID_IMFVideoPositionMapper))
     {
         *obj = &presenter->IMFVideoPositionMapper_iface;
+    }
+    else if (IsEqualIID(riid, &IID_IQualProp))
+    {
+        *obj = &presenter->IQualProp_iface;
+    }
+    else if (IsEqualIID(riid, &IID_IMFQualityAdvise))
+    {
+        *obj = &presenter->IMFQualityAdvise_iface;
+    }
+    else if (IsEqualIID(riid, &IID_IDirect3DDeviceManager9))
+    {
+        *obj = &presenter->IDirect3DDeviceManager9_iface;
     }
     else
     {
@@ -491,8 +752,13 @@ static ULONG WINAPI video_presenter_inner_Release(IUnknown *iface)
         video_presenter_clear_container(presenter);
         video_presenter_reset_media_type(presenter);
         DeleteCriticalSection(&presenter->cs);
+        if (presenter->swapchain)
+            IDirect3DSwapChain9_Release(presenter->swapchain);
         if (presenter->device_manager)
+        {
+            IDirect3DDeviceManager9_CloseDeviceHandle(presenter->device_manager, presenter->hdevice);
             IDirect3DDeviceManager9_Release(presenter->device_manager);
+        }
         if (presenter->allocator)
             IMFVideoSampleAllocator_Release(presenter->allocator);
         heap_free(presenter);
@@ -985,9 +1251,32 @@ static HRESULT WINAPI video_presenter_control_GetAspectRatioMode(IMFVideoDisplay
     return S_OK;
 }
 
+static HRESULT video_presenter_create_swapchain(struct video_presenter *presenter)
+{
+    D3DPRESENT_PARAMETERS present_params = { 0 };
+    IDirect3DDevice9 *d3d_device;
+    HRESULT hr;
+
+    if (SUCCEEDED(hr = video_presenter_get_device(presenter, &d3d_device)))
+    {
+        present_params.hDeviceWindow = presenter->video_window;
+        present_params.Windowed = TRUE;
+        present_params.SwapEffect = D3DSWAPEFFECT_COPY;
+        present_params.Flags = D3DPRESENTFLAG_VIDEO;
+        present_params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+        hr = IDirect3DDevice9_CreateAdditionalSwapChain(d3d_device, &present_params, &presenter->swapchain);
+
+        IDirect3DDevice9_Release(d3d_device);
+        IDirect3DDeviceManager9_UnlockDevice(presenter->device_manager, presenter->hdevice, FALSE);
+    }
+
+    return hr;
+}
+
 static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayControl *iface, HWND window)
 {
     struct video_presenter *presenter = impl_from_IMFVideoDisplayControl(iface);
+    HRESULT hr = S_OK;
 
     TRACE("%p, %p.\n", iface, window);
 
@@ -995,10 +1284,16 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
         return E_INVALIDARG;
 
     EnterCriticalSection(&presenter->cs);
-    presenter->video_window = window;
+    if (presenter->video_window != window)
+    {
+        if (presenter->swapchain)
+            IDirect3DSwapChain9_Release(presenter->swapchain);
+        presenter->video_window = window;
+        hr = video_presenter_create_swapchain(presenter);
+    }
     LeaveCriticalSection(&presenter->cs);
 
-    return S_OK;
+    return hr;
 }
 
 static HRESULT WINAPI video_presenter_control_GetVideoWindow(IMFVideoDisplayControl *iface, HWND *window)
@@ -1184,22 +1479,11 @@ static HRESULT WINAPI video_presenter_getservice_GetService(IMFGetService *iface
         return IDirect3DDeviceManager9_QueryInterface(presenter->device_manager, riid, obj);
 
     if (IsEqualGUID(&MR_VIDEO_RENDER_SERVICE, service))
-    {
-        if (IsEqualIID(riid, &IID_IMFVideoDisplayControl) ||
-                IsEqualIID(riid, &IID_IMFVideoPositionMapper))
-        {
-            return IMFVideoPresenter_QueryInterface(&presenter->IMFVideoPresenter_iface, riid, obj);
-        }
-        else
-        {
-            FIXME("Unsupported interface %s.\n", debugstr_guid(riid));
-            return E_NOTIMPL;
-        }
-    }
+        return IMFVideoPresenter_QueryInterface(&presenter->IMFVideoPresenter_iface, riid, obj);
 
     FIXME("Unimplemented service %s.\n", debugstr_guid(service));
 
-    return E_NOTIMPL;
+    return MF_E_UNSUPPORTED_SERVICE;
 }
 
 static const IMFGetServiceVtbl video_presenter_getservice_vtbl =
@@ -1274,7 +1558,13 @@ static ULONG WINAPI video_presenter_allocator_cb_Release(IMFVideoSampleAllocator
 
 static HRESULT WINAPI video_presenter_allocator_cb_NotifyRelease(IMFVideoSampleAllocatorNotify *iface)
 {
-    return E_NOTIMPL;
+    struct video_presenter *presenter = impl_from_IMFVideoSampleAllocatorNotify(iface);
+
+    /* Release notification is executed under allocator lock, instead of processing samples here
+       notify streaming thread. */
+    PostThreadMessageW(presenter->thread.tid, EVRM_PROCESS_INPUT, 0, 0);
+
+    return S_OK;
 }
 
 static const IMFVideoSampleAllocatorNotifyVtbl video_presenter_allocator_cb_vtbl =
@@ -1283,6 +1573,227 @@ static const IMFVideoSampleAllocatorNotifyVtbl video_presenter_allocator_cb_vtbl
     video_presenter_allocator_cb_AddRef,
     video_presenter_allocator_cb_Release,
     video_presenter_allocator_cb_NotifyRelease,
+};
+
+static HRESULT WINAPI video_presenter_qualprop_QueryInterface(IQualProp *iface, REFIID riid, void **obj)
+{
+    struct video_presenter *presenter = impl_from_IQualProp(iface);
+    return IMFVideoPresenter_QueryInterface(&presenter->IMFVideoPresenter_iface, riid, obj);
+}
+
+static ULONG WINAPI video_presenter_qualprop_AddRef(IQualProp *iface)
+{
+    struct video_presenter *presenter = impl_from_IQualProp(iface);
+    return IMFVideoPresenter_AddRef(&presenter->IMFVideoPresenter_iface);
+}
+
+static ULONG WINAPI video_presenter_qualprop_Release(IQualProp *iface)
+{
+    struct video_presenter *presenter = impl_from_IQualProp(iface);
+    return IMFVideoPresenter_Release(&presenter->IMFVideoPresenter_iface);
+}
+
+static HRESULT WINAPI video_presenter_qualprop_get_FramesDroppedInRenderer(IQualProp *iface, int *frames)
+{
+    FIXME("%p, %p stub.\n", iface, frames);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_qualprop_get_FramesDrawn(IQualProp *iface, int *frames)
+{
+    FIXME("%p, %p stub.\n", iface, frames);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_qualprop_get_AvgFrameRate(IQualProp *iface, int *avg_frame_rate)
+{
+    FIXME("%p, %p stub.\n", iface, avg_frame_rate);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_qualprop_get_Jitter(IQualProp *iface, int *jitter)
+{
+    FIXME("%p, %p stub.\n", iface, jitter);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_qualprop_get_AvgSyncOffset(IQualProp *iface, int *offset)
+{
+    FIXME("%p, %p stub.\n", iface, offset);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_qualprop_get_DevSyncOffset(IQualProp *iface, int *devoffset)
+{
+    FIXME("%p, %p stub.\n", iface, devoffset);
+
+    return E_NOTIMPL;
+}
+
+static const IQualPropVtbl video_presenter_qualprop_vtbl =
+{
+    video_presenter_qualprop_QueryInterface,
+    video_presenter_qualprop_AddRef,
+    video_presenter_qualprop_Release,
+    video_presenter_qualprop_get_FramesDroppedInRenderer,
+    video_presenter_qualprop_get_FramesDrawn,
+    video_presenter_qualprop_get_AvgFrameRate,
+    video_presenter_qualprop_get_Jitter,
+    video_presenter_qualprop_get_AvgSyncOffset,
+    video_presenter_qualprop_get_DevSyncOffset,
+};
+
+static HRESULT WINAPI video_presenter_quality_advise_QueryInterface(IMFQualityAdvise *iface, REFIID riid, void **out)
+{
+    struct video_presenter *presenter = impl_from_IMFQualityAdvise(iface);
+    return IMFVideoPresenter_QueryInterface(&presenter->IMFVideoPresenter_iface, riid, out);
+}
+
+static ULONG WINAPI video_presenter_quality_advise_AddRef(IMFQualityAdvise *iface)
+{
+    struct video_presenter *presenter = impl_from_IMFQualityAdvise(iface);
+    return IMFVideoPresenter_AddRef(&presenter->IMFVideoPresenter_iface);
+}
+
+static ULONG WINAPI video_presenter_quality_advise_Release(IMFQualityAdvise *iface)
+{
+    struct video_presenter *presenter = impl_from_IMFQualityAdvise(iface);
+    return IMFVideoPresenter_Release(&presenter->IMFVideoPresenter_iface);
+}
+
+static HRESULT WINAPI video_presenter_quality_advise_SetDropMode(IMFQualityAdvise *iface,
+        MF_QUALITY_DROP_MODE mode)
+{
+    FIXME("%p, %u.\n", iface, mode);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_quality_advise_SetQualityLevel(IMFQualityAdvise *iface,
+        MF_QUALITY_LEVEL level)
+{
+    FIXME("%p, %u.\n", iface, level);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_quality_advise_GetDropMode(IMFQualityAdvise *iface,
+        MF_QUALITY_DROP_MODE *mode)
+{
+    FIXME("%p, %p.\n", iface, mode);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_quality_advise_GetQualityLevel(IMFQualityAdvise *iface,
+        MF_QUALITY_LEVEL *level)
+{
+    FIXME("%p, %p.\n", iface, level);
+
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI video_presenter_quality_advise_DropTime(IMFQualityAdvise *iface, LONGLONG interval)
+{
+    FIXME("%p, %s.\n", iface, wine_dbgstr_longlong(interval));
+
+    return E_NOTIMPL;
+}
+
+static const IMFQualityAdviseVtbl video_presenter_quality_advise_vtbl =
+{
+    video_presenter_quality_advise_QueryInterface,
+    video_presenter_quality_advise_AddRef,
+    video_presenter_quality_advise_Release,
+    video_presenter_quality_advise_SetDropMode,
+    video_presenter_quality_advise_SetQualityLevel,
+    video_presenter_quality_advise_GetDropMode,
+    video_presenter_quality_advise_GetQualityLevel,
+    video_presenter_quality_advise_DropTime,
+};
+
+static HRESULT WINAPI video_presenter_device_manager_QueryInterface(IDirect3DDeviceManager9 *iface,
+        REFIID riid, void **obj)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IMFVideoPresenter_QueryInterface(&presenter->IMFVideoPresenter_iface, riid, obj);
+}
+
+static ULONG WINAPI video_presenter_device_manager_AddRef(IDirect3DDeviceManager9 *iface)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IMFVideoPresenter_AddRef(&presenter->IMFVideoPresenter_iface);
+}
+
+static ULONG WINAPI video_presenter_device_manager_Release(IDirect3DDeviceManager9 *iface)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IMFVideoPresenter_Release(&presenter->IMFVideoPresenter_iface);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_ResetDevice(IDirect3DDeviceManager9 *iface,
+        IDirect3DDevice9 *device, UINT token)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_ResetDevice(presenter->device_manager, device, token);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_OpenDeviceHandle(IDirect3DDeviceManager9 *iface, HANDLE *hdevice)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_OpenDeviceHandle(presenter->device_manager, hdevice);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_CloseDeviceHandle(IDirect3DDeviceManager9 *iface, HANDLE hdevice)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_CloseDeviceHandle(presenter->device_manager, hdevice);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_TestDevice(IDirect3DDeviceManager9 *iface, HANDLE hdevice)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_TestDevice(presenter->device_manager, hdevice);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_LockDevice(IDirect3DDeviceManager9 *iface, HANDLE hdevice,
+        IDirect3DDevice9 **device, BOOL block)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_LockDevice(presenter->device_manager, hdevice, device, block);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_UnlockDevice(IDirect3DDeviceManager9 *iface, HANDLE hdevice,
+        BOOL savestate)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_UnlockDevice(presenter->device_manager, hdevice, savestate);
+}
+
+static HRESULT WINAPI video_presenter_device_manager_GetVideoService(IDirect3DDeviceManager9 *iface, HANDLE hdevice,
+        REFIID riid, void **service)
+{
+    struct video_presenter *presenter = impl_from_IDirect3DDeviceManager9(iface);
+    return IDirect3DDeviceManager9_GetVideoService(presenter->device_manager, hdevice, riid, service);
+}
+
+static const IDirect3DDeviceManager9Vtbl video_presenter_device_manager_vtbl =
+{
+    video_presenter_device_manager_QueryInterface,
+    video_presenter_device_manager_AddRef,
+    video_presenter_device_manager_Release,
+    video_presenter_device_manager_ResetDevice,
+    video_presenter_device_manager_OpenDeviceHandle,
+    video_presenter_device_manager_CloseDeviceHandle,
+    video_presenter_device_manager_TestDevice,
+    video_presenter_device_manager_LockDevice,
+    video_presenter_device_manager_UnlockDevice,
+    video_presenter_device_manager_GetVideoService,
 };
 
 HRESULT WINAPI MFCreateVideoPresenter(IUnknown *owner, REFIID riid_device, REFIID riid, void **obj)
@@ -1353,12 +1864,16 @@ HRESULT evr_presenter_create(IUnknown *outer, void **out)
     object->IMFRateSupport_iface.lpVtbl = &video_presenter_rate_support_vtbl;
     object->IMFGetService_iface.lpVtbl = &video_presenter_getservice_vtbl;
     object->IMFVideoPositionMapper_iface.lpVtbl = &video_presenter_position_mapper_vtbl;
+    object->IQualProp_iface.lpVtbl = &video_presenter_qualprop_vtbl;
+    object->IMFQualityAdvise_iface.lpVtbl = &video_presenter_quality_advise_vtbl;
     object->allocator_cb.lpVtbl = &video_presenter_allocator_cb_vtbl;
     object->IUnknown_inner.lpVtbl = &video_presenter_inner_vtbl;
+    object->IDirect3DDeviceManager9_iface.lpVtbl = &video_presenter_device_manager_vtbl;
     object->outer_unk = outer ? outer : &object->IUnknown_inner;
     object->refcount = 1;
     object->src_rect.right = object->src_rect.bottom = 1.0f;
     object->ar_mode = MFVideoARMode_PreservePicture | MFVideoARMode_PreservePixel;
+    object->allocator_capacity = 3;
     InitializeCriticalSection(&object->cs);
 
     if (FAILED(hr = DXVA2CreateDirect3DDeviceManager9(&object->reset_token, &object->device_manager)))

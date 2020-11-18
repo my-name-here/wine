@@ -2163,11 +2163,8 @@ AC_CHECK_FUNCS(\
 	_spawnvp \
 	epoll_create \
 	ffs \
-	finite \
-	finitef \
 	fnmatch \
 	fork \
-	fpclass \
 	fstatfs \
 	fstatvfs \
 	futimens \
@@ -2699,8 +2696,6 @@ AC_CHECK_FUNCS(\
 	expm1f \
 	fma \
 	fmaf \
-	ilogb \
-	ilogbf \
 	j0 \
 	j1 \
 	jn \
