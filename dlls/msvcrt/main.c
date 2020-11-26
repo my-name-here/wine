@@ -75,7 +75,7 @@ static inline void msvcrt_free_tls_mem(void)
     MSVCRT_free(tls->time_buffer);
     MSVCRT_free(tls->tmpnam_buffer);
     MSVCRT_free(tls->wtmpnam_buffer);
-    if(tls->have_locale) {
+    if(tls->locale_flags & LOCALE_FREE) {
         free_locinfo(tls->locinfo);
         free_mbcinfo(tls->mbcinfo);
     }
@@ -110,7 +110,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
         msvcrt_destroy_heap();
         return FALSE;
     }
-    msvcrt_init_math();
+    msvcrt_init_math(hinstDLL);
     msvcrt_init_io();
     msvcrt_init_console();
     msvcrt_init_args();

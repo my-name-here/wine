@@ -20,6 +20,7 @@
 
 #include <stdarg.h>
 #include <string.h>
+#include <float.h>
 
 #define COBJMACROS
 
@@ -66,6 +67,21 @@ static void check_interface_(unsigned int line, void *iface_ptr, REFIID iid, BOO
     expected_hr = supported ? S_OK : E_NOINTERFACE;
 
     hr = IUnknown_QueryInterface(iface, iid, (void **)&unk);
+    ok_(__FILE__, line)(hr == expected_hr, "Got hr %#x, expected %#x.\n", hr, expected_hr);
+    if (SUCCEEDED(hr))
+        IUnknown_Release(unk);
+}
+
+#define check_service_interface(a, b, c, d) check_service_interface_(__LINE__, a, b, c, d)
+static void check_service_interface_(unsigned int line, void *iface_ptr, REFGUID service, REFIID iid, BOOL supported)
+{
+    IUnknown *iface = iface_ptr;
+    HRESULT hr, expected_hr;
+    IUnknown *unk;
+
+    expected_hr = supported ? S_OK : E_NOINTERFACE;
+
+    hr = MFGetService(iface, service, iid, (void **)&unk);
     ok_(__FILE__, line)(hr == expected_hr, "Got hr %#x, expected %#x.\n", hr, expected_hr);
     if (SUCCEEDED(hr))
         IUnknown_Release(unk);
@@ -1172,13 +1188,14 @@ static void test_media_session(void)
     IMFAttributes *attributes;
     IMFMediaSession *session;
     IMFTopology *topology;
+    IMFShutdown *shutdown;
     PROPVARIANT propvar;
+    DWORD status, caps;
     IMFGetService *gs;
     IMFClock *clock;
     IUnknown *unk;
     HRESULT hr;
     float rate;
-    DWORD caps;
     BOOL thin;
 
     hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
@@ -1259,8 +1276,23 @@ todo_wine
     hr = MFCreateMediaSession(NULL, &session);
     ok(hr == S_OK, "Failed to create media session, hr %#x.\n", hr);
 
+    hr = IMFMediaSession_GetClock(session, &clock);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFClock_QueryInterface(clock, &IID_IMFShutdown, (void **)&shutdown);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFShutdown_GetShutdownStatus(shutdown, &status);
+    ok(hr == MF_E_INVALIDREQUEST, "Unexpected hr %#x.\n", hr);
+
     hr = IMFMediaSession_Shutdown(session);
     ok(hr == S_OK, "Failed to shut down, hr %#x.\n", hr);
+
+    hr = IMFShutdown_GetShutdownStatus(shutdown, &status);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(status == MFSHUTDOWN_COMPLETED, "Unexpected shutdown status %u.\n", status);
+
+    IMFShutdown_Release(shutdown);
 
     hr = IMFMediaSession_ClearTopologies(session);
     ok(hr == MF_E_SHUTDOWN, "Unexpected hr %#x.\n", hr);
@@ -2097,6 +2129,7 @@ static void test_sample_grabber(void)
     IMFPresentationTimeSource *time_source;
     IMFPresentationClock *clock, *clock2;
     IMFStreamSink *stream, *stream2;
+    IMFRateSupport *rate_support;
     IMFMediaEventGenerator *eg;
     IMFMediaSink *sink, *sink2;
     DWORD flags, count, id;
@@ -2104,6 +2137,7 @@ static void test_sample_grabber(void)
     IMFMediaEvent *event;
     ULONG refcount;
     IUnknown *unk;
+    float rate;
     HRESULT hr;
     GUID guid;
 
@@ -2136,6 +2170,53 @@ static void test_sample_grabber(void)
     hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&sink);
     ok(hr == S_OK, "Failed to activate object, hr %#x.\n", hr);
 
+    check_interface(sink, &IID_IMFClockStateSink, TRUE);
+    check_interface(sink, &IID_IMFMediaEventGenerator, TRUE);
+    check_interface(sink, &IID_IMFGetService, TRUE);
+    check_interface(sink, &IID_IMFRateSupport, TRUE);
+    check_service_interface(sink, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateSupport, TRUE);
+
+    if (SUCCEEDED(MFGetService((IUnknown *)sink, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateSupport, (void **)&rate_support)))
+    {
+        hr = IMFRateSupport_GetFastestRate(rate_support, MFRATE_FORWARD, FALSE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == FLT_MAX, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetFastestRate(rate_support, MFRATE_FORWARD, TRUE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == FLT_MAX, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetFastestRate(rate_support, MFRATE_REVERSE, FALSE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == -FLT_MAX, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetFastestRate(rate_support, MFRATE_REVERSE, TRUE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == -FLT_MAX, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_FORWARD, FALSE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_FORWARD, TRUE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_REVERSE, FALSE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_GetSlowestRate(rate_support, MFRATE_REVERSE, TRUE, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == 0.0f, "Unexpected rate %f.\n", rate);
+
+        hr = IMFRateSupport_IsRateSupported(rate_support, TRUE, 1.0f, &rate);
+        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
+
+        IMFRateSupport_Release(rate_support);
+    }
+
     hr = IMFMediaSink_GetCharacteristics(sink, &flags);
     ok(hr == S_OK, "Failed to get sink flags, hr %#x.\n", hr);
     ok(flags & MEDIASINK_FIXED_STREAMS, "Unexpected flags %#x.\n", flags);
@@ -2148,6 +2229,7 @@ static void test_sample_grabber(void)
     ok(hr == S_OK, "Failed to get sink stream, hr %#x.\n", hr);
 
     check_interface(stream, &IID_IMFMediaEventGenerator, TRUE);
+    check_interface(stream, &IID_IMFMediaTypeHandler, TRUE);
 
     hr = IMFStreamSink_GetIdentifier(stream, &id);
     ok(hr == S_OK, "Failed to get stream id, hr %#x.\n", hr);
@@ -2843,11 +2925,11 @@ static void test_sar(void)
 {
     IMFPresentationClock *present_clock, *present_clock2;
     IMFMediaType *mediatype, *mediatype2, *mediatype3;
+    IMFClockStateSink *state_sink, *state_sink2;
     IMFMediaTypeHandler *handler, *handler2;
     IMFPresentationTimeSource *time_source;
     IMFSimpleAudioVolume *simple_volume;
     IMFAudioStreamVolume *stream_volume;
-    IMFClockStateSink *state_sink;
     IMFMediaSink *sink, *sink2;
     IMFStreamSink *stream_sink;
     IMFAttributes *attributes;
@@ -2885,6 +2967,14 @@ todo_wine
 
 if (SUCCEEDED(hr))
 {
+    hr = IMFPresentationTimeSource_QueryInterface(time_source, &IID_IMFClockStateSink, (void **)&state_sink2);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFPresentationTimeSource_QueryInterface(time_source, &IID_IMFClockStateSink, (void **)&state_sink);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(state_sink == state_sink2, "Unexpected clock sink.\n");
+    IMFClockStateSink_Release(state_sink2);
+    IMFClockStateSink_Release(state_sink);
+
     hr = IMFPresentationTimeSource_GetUnderlyingClock(time_source, &clock);
     ok(hr == MF_E_NO_CLOCK, "Unexpected hr %#x.\n", hr);
 
@@ -2926,6 +3016,9 @@ if (SUCCEEDED(hr))
     check_interface(sink, &IID_IMFMediaSinkPreroll, TRUE);
     check_interface(sink, &IID_IMFMediaEventGenerator, TRUE);
     check_interface(sink, &IID_IMFClockStateSink, TRUE);
+    check_interface(sink, &IID_IMFGetService, TRUE);
+    todo_wine check_interface(sink, &IID_IMFPresentationTimeSource, TRUE);
+    check_service_interface(sink, &MR_POLICY_VOLUME_SERVICE, &IID_IMFSimpleAudioVolume, TRUE);
 
     /* Clock */
     hr = IMFMediaSink_QueryInterface(sink, &IID_IMFClockStateSink, (void **)&state_sink);
@@ -2975,6 +3068,8 @@ todo_wine
     ok(hr == S_OK, "Failed to get a stream, hr %#x.\n", hr);
 
     check_interface(stream_sink, &IID_IMFMediaEventGenerator, TRUE);
+    check_interface(stream_sink, &IID_IMFMediaTypeHandler, TRUE);
+    todo_wine check_interface(stream_sink, &IID_IMFGetService, TRUE);
 
     hr = IMFStreamSink_GetIdentifier(stream_sink, &id);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
@@ -3024,11 +3119,17 @@ todo_wine
     hr = MFCreateMediaType(&mediatype);
     ok(hr == S_OK, "Failed to create media type, hr %#x.\n", hr);
 
+    /* Actual return value is MF_E_ATRIBUTENOTFOUND triggered by missing MF_MT_MAJOR_TYPE */
     hr = IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype, NULL);
-todo_wine
-    ok(hr == MF_E_ATTRIBUTENOTFOUND, "Unexpected hr %#x.\n", hr);
+    ok(FAILED(hr), "Unexpected hr %#x.\n", hr);
 
-    IMFMediaType_SetGUID(mediatype, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
+    hr = IMFMediaType_SetGUID(mediatype, &MF_MT_MAJOR_TYPE, &MFMediaType_Video);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype, NULL);
+    ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFMediaType_SetGUID(mediatype, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
     hr = IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype, NULL);
     ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#x.\n", hr);
 
@@ -3242,14 +3343,14 @@ static void test_evr(void)
     IMFVideoRenderer *video_renderer;
     IMFMediaSink *sink, *sink2;
     IMFAttributes *attributes;
+    DWORD flags, count, value;
     IMFActivate *activate;
     HWND window, window2;
-    DWORD flags, count;
     LONG sample_count;
     IMFGetService *gs;
     IMFSample *sample;
     IUnknown *unk;
-    UINT64 value;
+    UINT64 window3;
     HRESULT hr;
     GUID guid;
 
@@ -3272,9 +3373,9 @@ static void test_evr(void)
     hr = MFCreateVideoRendererActivate(window, &activate);
     ok(hr == S_OK, "Failed to create activate object, hr %#x.\n", hr);
 
-    hr = IMFActivate_GetUINT64(activate, &MF_ACTIVATE_VIDEO_WINDOW, &value);
+    hr = IMFActivate_GetUINT64(activate, &MF_ACTIVATE_VIDEO_WINDOW, &window3);
     ok(hr == S_OK, "Failed to get attribute, hr %#x.\n", hr);
-    ok(UlongToHandle(value) == window, "Unexpected value.\n");
+    ok(UlongToHandle(window3) == window, "Unexpected value.\n");
 
     hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&sink);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
@@ -3307,9 +3408,9 @@ static void test_evr(void)
     ok(hr == S_OK, "Failed to get attribute count, hr %#x.\n", hr);
     ok(count == 1, "Unexpected count %u.\n", count);
 
-    hr = IMFActivate_GetUINT64(activate, &MF_ACTIVATE_VIDEO_WINDOW, &value);
+    hr = IMFActivate_GetUINT64(activate, &MF_ACTIVATE_VIDEO_WINDOW, &window3);
     ok(hr == S_OK, "Failed to get attribute, hr %#x.\n", hr);
-    ok(!value, "Unexpected value.\n");
+    ok(!window3, "Unexpected value.\n");
 
     hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&sink);
     ok(hr == S_OK, "Failed to activate, hr %#x.\n", hr);
@@ -3336,6 +3437,25 @@ static void test_evr(void)
     /* Primary stream type handler. */
     hr = IMFMediaSink_GetStreamSinkById(sink, 0, &stream_sink);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    hr = IMFStreamSink_QueryInterface(stream_sink, &IID_IMFAttributes, (void **)&attributes);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    hr = IMFAttributes_GetCount(attributes, &count);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(count == 2, "Unexpected count %u.\n", count);
+    value = 0;
+    hr = IMFAttributes_GetUINT32(attributes, &MF_SA_REQUIRED_SAMPLE_COUNT, &value);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(value == 1, "Unexpected attribute value %u.\n", value);
+    value = 0;
+    hr = IMFAttributes_GetUINT32(attributes, &MF_SA_D3D_AWARE, &value);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(value == 1, "Unexpected attribute value %u.\n", value);
+
+    hr = IMFAttributes_QueryInterface(attributes, &IID_IMFStreamSink, (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    IUnknown_Release(unk);
+    IMFAttributes_Release(attributes);
 
     hr = IMFStreamSink_GetMediaTypeHandler(stream_sink, &type_handler);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);

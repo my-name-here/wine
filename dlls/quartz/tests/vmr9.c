@@ -1220,9 +1220,14 @@ static void test_flushing(IPin *pin, IMemInputPin *input, IMediaControl *control
 
     hr = IMediaControl_GetState(control, 0, &state);
     todo_wine ok(hr == VFW_S_STATE_INTERMEDIATE, "Got hr %#x.\n", hr);
+    ok(state == State_Paused, "Got state %#x.\n", state);
 
     thread = send_frame(input);
     ok(WaitForSingleObject(thread, 100) == WAIT_TIMEOUT, "Thread should block in Receive().\n");
+
+    hr = IMediaControl_GetState(control, 1000, &state);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(state == State_Paused, "Got state %#x.\n", state);
 
     hr = IMediaControl_Run(control);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
@@ -1432,18 +1437,14 @@ static void test_sample_time(IPin *pin, IMemInputPin *input, IMediaControl *cont
     hr = join_thread(send_frame_time(input, -2, 0x00ff0000)); /* red */
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
-    thread = send_frame_time(input, 2, 0x00ff00ff); /* magenta */
-    ok(WaitForSingleObject(thread, 500) == WAIT_TIMEOUT, "Thread should block in Receive().\n");
-    hr = join_thread(thread);
-    ok(hr == S_OK, "Got hr %#x.\n", hr);
-
     thread = send_frame_time(input, 1000000, 0x00ffffff); /* white */
     ok(WaitForSingleObject(thread, 100) == WAIT_TIMEOUT, "Thread should block in Receive().\n");
 
     hr = IPin_BeginFlush(pin);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
     hr = join_thread(thread);
-    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    /* If the frame makes it to Receive() in time to be rendered, we get S_OK. */
+    ok(hr == S_OK || hr == S_FALSE, "Got hr %#x.\n", hr);
     hr = IPin_EndFlush(pin);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
@@ -1635,6 +1636,13 @@ static void test_connect_pin(void)
     hr = IPin_ConnectionMediaType(pin, &mt);
     ok(hr == VFW_E_NOT_CONNECTED, "Got hr %#x.\n", hr);
 
+    hr = IMediaControl_Pause(control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = IFilterGraph2_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &req_mt);
+    ok(hr == VFW_E_NOT_STOPPED, "Got hr %#x.\n", hr);
+    hr = IMediaControl_Stop(control);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+
     hr = IFilterGraph2_ConnectDirect(graph, &source.source.pin.IPin_iface, pin, &req_mt);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
 
@@ -1646,6 +1654,9 @@ static void test_connect_pin(void)
     hr = IPin_ConnectionMediaType(pin, &mt);
     ok(hr == S_OK, "Got hr %#x.\n", hr);
     ok(compare_media_types(&mt, &req_mt), "Media types didn't match.\n");
+
+    /* Disconnecting while not stopped is broken: it returns S_OK, but
+     * subsequent attempts to connect return VFW_E_ALREADY_CONNECTED. */
 
     test_allocator(input);
 
@@ -2341,8 +2352,8 @@ static void test_video_window_messages(IVideoWindow *window, HWND hwnd, HWND our
     params.message = WM_SYSCOLORCHANGE;
     thread = CreateThread(NULL, 0, notify_message_proc, &params, 0, NULL);
     ok(WaitForSingleObject(thread, 100) == WAIT_TIMEOUT, "Thread should block.\n");
-    ret = GetQueueStatus(QS_SENDMESSAGE | QS_POSTMESSAGE);
-    ok(ret == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE), "Got unexpected status %#x.\n", ret);
+    ret = MsgWaitForMultipleObjects(0, NULL, FALSE, 1000, QS_SENDMESSAGE);
+    ok(!ret, "Did not find a sent message.\n");
 
     while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
     ok(!WaitForSingleObject(thread, 1000), "Wait timed out.\n");

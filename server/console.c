@@ -98,6 +98,9 @@ static const struct object_ops console_input_ops =
 };
 
 static enum server_fd_type console_get_fd_type( struct fd *fd );
+static void console_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class );
+static void console_get_volume_info( struct fd *fd, unsigned int info_class );
+static int console_input_read( struct fd *fd, struct async *async, file_pos_t pos );
 static int console_input_flush( struct fd *fd, struct async *async );
 static int console_input_ioctl( struct fd *fd, ioctl_code_t code, struct async *async );
 
@@ -106,11 +109,11 @@ static const struct fd_ops console_input_fd_ops =
     default_fd_get_poll_events,   /* get_poll_events */
     default_poll_event,           /* poll_event */
     console_get_fd_type,          /* get_fd_type */
-    no_fd_read,                   /* read */
+    console_input_read,           /* read */
     no_fd_write,                  /* write */
     console_input_flush,          /* flush */
-    no_fd_get_file_info,          /* get_file_info */
-    no_fd_get_volume_info,        /* get_volume_info */
+    console_get_file_info,        /* get_file_info */
+    console_get_volume_info,      /* get_volume_info */
     console_input_ioctl,          /* ioctl */
     default_fd_queue_async,       /* queue_async */
     default_fd_reselect_async     /* reselect_async */
@@ -247,8 +250,8 @@ static const struct fd_ops screen_buffer_fd_ops =
     no_fd_read,                   /* read */
     screen_buffer_write,          /* write */
     no_fd_flush,                  /* flush */
-    no_fd_get_file_info,          /* get_file_info */
-    no_fd_get_volume_info,        /* get_volume_info */
+    console_get_file_info,        /* get_file_info */
+    console_get_volume_info,      /* get_volume_info */
     screen_buffer_ioctl,          /* ioctl */
     default_fd_queue_async,       /* queue_async */
     default_fd_reselect_async     /* reselect_async */
@@ -419,6 +422,33 @@ static enum server_fd_type console_get_fd_type( struct fd *fd )
     return FD_TYPE_CHAR;
 }
 
+static void console_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
+{
+    set_error( STATUS_INVALID_DEVICE_REQUEST );
+}
+
+static void console_get_volume_info( struct fd *fd, unsigned int info_class )
+{
+    switch (info_class)
+    {
+    case FileFsDeviceInformation:
+        {
+            static const FILE_FS_DEVICE_INFORMATION device_info =
+            {
+                FILE_DEVICE_CONSOLE,
+                FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL
+            };
+            if (get_reply_max_size() >= sizeof(device_info))
+                set_reply_data( &device_info, sizeof(device_info) );
+            else
+                set_error( STATUS_BUFFER_TOO_SMALL );
+            break;
+        }
+    default:
+        set_error( STATUS_NOT_IMPLEMENTED );
+    }
+}
+
 static struct object *create_console_input(void)
 {
     struct console_input *console_input;
@@ -563,36 +593,6 @@ int free_console( struct process *process )
     release_object( console );
 
     return 1;
-}
-
-/* let process inherit the console from parent... this handle two cases :
- *	1/ generic console inheritance
- *	2/ parent is a renderer which launches process, and process should attach to the console
- *	   rendered by parent
- */
-obj_handle_t inherit_console( struct thread *parent_thread, obj_handle_t handle, struct process *process,
-                              obj_handle_t hconin )
-{
-    struct console_input *console = NULL;
-
-    if (handle) return duplicate_handle( current->process, handle, process, 0, 0, DUP_HANDLE_SAME_ACCESS );
-
-    /* if parent is a renderer, then attach current process to its console
-     * a bit hacky....
-     */
-    if (hconin && parent_thread)
-    {
-        /* FIXME: should we check some access rights ? */
-        if (!(console = (struct console_input *)get_handle_obj( parent_thread->process, hconin,
-                                                                0, &console_input_ops )))
-            clear_error();  /* ignore error */
-    }
-    if (!console) return 0;
-
-    process->console = console;
-    console->num_proc++;
-    return alloc_handle( process, process->console,
-                         SYNCHRONIZE | GENERIC_READ | GENERIC_WRITE, 0 );
 }
 
 struct thread *console_get_renderer( struct console_input *console )
@@ -867,7 +867,15 @@ static struct object *create_console_server( void )
 
 static int is_blocking_read_ioctl( unsigned int code )
 {
-    return code == IOCTL_CONDRV_READ_INPUT || code == IOCTL_CONDRV_READ_CONSOLE;
+    switch (code)
+    {
+    case IOCTL_CONDRV_READ_INPUT:
+    case IOCTL_CONDRV_READ_CONSOLE:
+    case IOCTL_CONDRV_READ_FILE:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static int console_input_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
@@ -903,6 +911,18 @@ static int console_input_ioctl( struct fd *fd, ioctl_code_t code, struct async *
         }
         return queue_host_ioctl( console->server, code, 0, async, &console->ioctl_q );
     }
+}
+
+static int console_input_read( struct fd *fd, struct async *async, file_pos_t pos )
+{
+    struct console_input *console = get_fd_user( fd );
+
+    if (!console->server)
+    {
+        set_error( STATUS_INVALID_HANDLE );
+        return 0;
+    }
+    return queue_host_ioctl( console->server, IOCTL_CONDRV_READ_FILE, 0, async, &console->ioctl_q );
 }
 
 static int console_input_flush( struct fd *fd, struct async *async )

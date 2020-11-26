@@ -57,7 +57,7 @@ static inline const APICHAR* FUNC_NAME(pf_parse_int)(const APICHAR *fmt, int *va
 {
     *val = 0;
 
-    while(isdigit(*fmt)) {
+    while (*fmt >= '0' && *fmt <= '9') {
         *val *= 10;
         *val += *fmt++ - '0';
     }
@@ -601,12 +601,10 @@ static inline int FUNC_NAME(pf_output_fp)(FUNC_NAME(puts_clbk) pf_puts, void *pu
     ULONGLONG m;
     DWORD l;
 
-    TRACE("floating point argument: %.16le\n", v);
-
     if(flags->Precision == -1)
         flags->Precision = 6;
 
-    v = frexp(v, &e2);
+    v = MSVCRT_frexp(v, &e2);
     if(v) {
         m = (ULONGLONG)1 << (MANT_BITS - 1);
         m |= (*(ULONGLONG*)&v & (((ULONGLONG)1 << (MANT_BITS - 1)) - 1));
@@ -638,7 +636,7 @@ static inline int FUNC_NAME(pf_output_fp)(FUNC_NAME(puts_clbk) pf_puts, void *pu
     if(!b->data[bnum_idx(b, b->e-1)])
         first_limb_len = 1;
     else
-        first_limb_len = floor(log10(b->data[bnum_idx(b, b->e - 1)])) + 1;
+        first_limb_len = MSVCRT_floor(MSVCRT_log10(b->data[bnum_idx(b, b->e - 1)])) + 1;
     radix_pos = first_limb_len + LIMB_DIGITS + e10;
 
     round_pos = flags->Precision;
@@ -703,7 +701,7 @@ static inline int FUNC_NAME(pf_output_fp)(FUNC_NAME(puts_clbk) pf_puts, void *pu
                 if(!b->data[bnum_idx(b, b->e-1)])
                     i = 1;
                 else
-                    i = floor(log10(b->data[bnum_idx(b, b->e-1)])) + 1;
+                    i = MSVCRT_floor(MSVCRT_log10(b->data[bnum_idx(b, b->e-1)])) + 1;
                 if(i != first_limb_len) {
                     first_limb_len = i;
                     radix_pos++;
@@ -973,8 +971,6 @@ int FUNC_NAME(pf_printf)(FUNC_NAME(puts_clbk) pf_puts, void *puts_ctx, const API
     BOOL standard_rounding = FALSE;
 #endif
 
-    TRACE("Format is: %s\n", FUNC_NAME(debugstr)(fmt));
-
     if (!MSVCRT_CHECK_PMT(fmt != NULL))
         return -1;
 
@@ -1041,7 +1037,7 @@ int FUNC_NAME(pf_printf)(FUNC_NAME(puts_clbk) pf_puts, void *puts_ctx, const API
                 flags.LeftAlign = TRUE;
                 flags.FieldLength = -flags.FieldLength;
             }
-        } else while(isdigit(*p)) {
+        } else while (*p >= '0' && *p <= '9') {
             flags.FieldLength *= 10;
             flags.FieldLength += *p++ - '0';
         }
@@ -1059,7 +1055,7 @@ int FUNC_NAME(pf_printf)(FUNC_NAME(puts_clbk) pf_puts, void *puts_ctx, const API
                     i = -1;
 
                 flags.Precision = pf_args(args_ctx, i, VT_INT, valist).get_int;
-            } else while(isdigit(*p)) {
+            } else while (*p >= '0' && *p <= '9') {
                 flags.Precision *= 10;
                 flags.Precision += *p++ - '0';
             }

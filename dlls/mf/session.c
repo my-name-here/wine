@@ -32,6 +32,10 @@
 
 #include "mf_private.h"
 
+#include "initguid.h"
+
+DEFINE_GUID(_MF_TOPONODE_IMFActivate, 0x33706f4a, 0x309a, 0x49be, 0xa8, 0xdd, 0xe7, 0xc0, 0x87, 0x5e, 0xb6, 0x79);
+
 WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
 
 enum session_command
@@ -683,6 +687,9 @@ static HRESULT session_bind_output_nodes(IMFTopology *topology)
                         IMFMediaSink_Release(media_sink);
                     }
 
+                    if (SUCCEEDED(hr))
+                        IMFTopologyNode_SetUnknown(node, &_MF_TOPONODE_IMFActivate, (IUnknown *)activate);
+
                     IMFActivate_Release(activate);
                 }
             }
@@ -776,12 +783,69 @@ static void release_topo_node(struct topo_node *node)
     heap_free(node);
 }
 
+static void session_shutdown_current_topology(struct media_session *session)
+{
+    unsigned int shutdown, force_shutdown;
+    MF_TOPOLOGY_TYPE node_type;
+    IMFStreamSink *stream_sink;
+    IMFTopology *topology;
+    IMFTopologyNode *node;
+    IMFActivate *activate;
+    IMFMediaSink *sink;
+    IUnknown *object;
+    WORD idx = 0;
+
+    topology = session->presentation.current_topology;
+    force_shutdown = session->state == SESSION_STATE_SHUT_DOWN;
+
+    /* FIXME: should handle async MFTs, but these are not supported by the rest of the pipeline currently. */
+
+    while (SUCCEEDED(IMFTopology_GetNode(topology, idx++, &node)))
+    {
+        if (SUCCEEDED(IMFTopologyNode_GetNodeType(node, &node_type)) &&
+                node_type == MF_TOPOLOGY_OUTPUT_NODE)
+        {
+            shutdown = 1;
+            IMFTopologyNode_GetUINT32(node, &MF_TOPONODE_NOSHUTDOWN_ON_REMOVE, &shutdown);
+
+            if (force_shutdown || shutdown)
+            {
+                if (SUCCEEDED(IMFTopologyNode_GetUnknown(node, &_MF_TOPONODE_IMFActivate, &IID_IMFActivate,
+                        (void **)&activate)))
+                {
+                    IMFActivate_ShutdownObject(activate);
+                    IMFActivate_Release(activate);
+                }
+                else if (SUCCEEDED(IMFTopologyNode_GetObject(node, &object)))
+                {
+                    if (SUCCEEDED(IUnknown_QueryInterface(object, &IID_IMFStreamSink, (void **)&stream_sink)))
+                    {
+                        if (SUCCEEDED(IMFStreamSink_GetMediaSink(stream_sink, &sink)))
+                        {
+                            IMFMediaSink_Shutdown(sink);
+                            IMFMediaSink_Release(sink);
+                        }
+
+                        IMFStreamSink_Release(stream_sink);
+                    }
+
+                    IUnknown_Release(object);
+                }
+            }
+        }
+
+        IMFTopologyNode_Release(node);
+    }
+}
+
 static void session_clear_presentation(struct media_session *session)
 {
     struct media_source *source, *source2;
     struct media_sink *sink, *sink2;
     struct topo_node *node, *node2;
     struct session_op *op, *op2;
+
+    session_shutdown_current_topology(session);
 
     IMFTopology_Clear(session->presentation.current_topology);
     session->presentation.topo_status = MF_TOPOSTATUS_INVALID;
@@ -958,7 +1022,7 @@ static void session_pause(struct media_session *session)
     {
         case SESSION_STATE_STARTED:
 
-            /* Transition in two steps - pause clock, wait for sinks and pause sources. */
+            /* Transition in two steps - pause the clock, wait for sinks, then pause sources. */
             if (SUCCEEDED(hr = IMFPresentationClock_Pause(session->clock)))
                 session->state = SESSION_STATE_PAUSING_SINKS;
 
@@ -997,7 +1061,7 @@ static void session_stop(struct media_session *session)
         case SESSION_STATE_STARTED:
         case SESSION_STATE_PAUSED:
 
-            /* Transition in two steps - pause clock, wait for sinks and pause sources. */
+            /* Transition in two steps - stop the clock, wait for sinks, then stop sources. */
             IMFPresentationClock_GetTime(session->clock, &session->presentation.clock_stop_time);
             if (SUCCEEDED(hr = IMFPresentationClock_Stop(session->clock)))
                 session->state = SESSION_STATE_STOPPING_SINKS;
@@ -1783,7 +1847,7 @@ static HRESULT WINAPI mfsession_Shutdown(IMFMediaSession *iface)
     struct media_session *session = impl_from_IMFMediaSession(iface);
     HRESULT hr = S_OK;
 
-    FIXME("%p.\n", iface);
+    TRACE("%p.\n", iface);
 
     EnterCriticalSection(&session->cs);
     if (SUCCEEDED(hr = session_is_shut_down(session)))
@@ -1792,6 +1856,10 @@ static HRESULT WINAPI mfsession_Shutdown(IMFMediaSession *iface)
         IMFMediaEventQueue_Shutdown(session->event_queue);
         if (session->quality_manager)
             IMFQualityManager_Shutdown(session->quality_manager);
+        MFShutdownObject((IUnknown *)session->clock);
+        IMFPresentationClock_Release(session->clock);
+        session->clock = NULL;
+        session_clear_presentation(session);
     }
     LeaveCriticalSection(&session->cs);
 

@@ -22,7 +22,6 @@ C_SRCS = \
 	icoformat.c \
 	imgfactory.c \
 	info.c \
-	jpegformat.c \
 	libjpeg.c \
 	libpng.c \
 	libtiff.c \
@@ -37,7 +36,6 @@ C_SRCS = \
 	scaler.c \
 	stream.c \
 	tgaformat.c \
-	tiffformat.c \
 	ungif.c \
 	unix_iface.c \
 	unix_lib.c \
