@@ -4256,6 +4256,8 @@ static HRESULT adapter_gl_create_device(struct wined3d *wined3d, const struct wi
     if (!(device_gl = heap_alloc_zero(sizeof(*device_gl))))
         return E_OUTOFMEMORY;
 
+    device_gl->current_fence_id = 1;
+
     if (FAILED(hr = wined3d_device_init(&device_gl->d, wined3d, adapter->ordinal, device_type, focus_window,
             flags, surface_alignment, levels, level_count, adapter->gl_info.supported, device_parent)))
     {
@@ -4778,7 +4780,7 @@ static void wined3d_view_gl_destroy_object(void *object)
             gl_info->gl_ops.gl.p_glDeleteTextures(1, &ctx->gl_view->name);
         }
         if (counter_id)
-            GL_EXTCALL(glDeleteBuffers(1, &counter_id));
+            wined3d_context_gl_destroy_bo(wined3d_context_gl(context), ctx->counter_bo);
         checkGLcall("delete resources");
         context_release(context);
     }

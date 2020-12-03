@@ -13,11 +13,11 @@ extern "C" {
 #endif
 
 _ACRTIMP wchar_t*      __cdecl _itow(int,wchar_t*,int);
-_ACRTIMP errno_t       __cdecl _itow_s(int,wchar_t*,int, int);
+_ACRTIMP errno_t       __cdecl _itow_s(int,wchar_t*,size_t, int);
 _ACRTIMP wchar_t*      __cdecl _i64tow(__int64,wchar_t*,int);
 _ACRTIMP errno_t       __cdecl _i64tow_s(__int64, wchar_t*, size_t, int);
 _ACRTIMP wchar_t*      __cdecl _ltow(__msvcrt_long,wchar_t*,int);
-_ACRTIMP errno_t       __cdecl _ltow_s(__msvcrt_long,wchar_t*,int,int);
+_ACRTIMP errno_t       __cdecl _ltow_s(__msvcrt_long,wchar_t*,size_t,int);
 _ACRTIMP wchar_t*      __cdecl _ui64tow(unsigned __int64,wchar_t*,int);
 _ACRTIMP errno_t       __cdecl _ui64tow_s(unsigned __int64, wchar_t*, size_t, int);
 _ACRTIMP wchar_t*      __cdecl _ultow(__msvcrt_ulong,wchar_t*,int);
@@ -39,8 +39,11 @@ _ACRTIMP __int64       __cdecl _wtoi64(const wchar_t*);
 _ACRTIMP __msvcrt_long __cdecl _wtol(const wchar_t*);
 
 _ACRTIMP size_t        __cdecl mbstowcs(wchar_t*,const char*,size_t);
+_ACRTIMP size_t        __cdecl _mbstowcs_l(wchar_t*,const char*,size_t,_locale_t);
 _ACRTIMP errno_t       __cdecl mbstowcs_s(size_t*,wchar_t*,size_t,const char*,size_t);
+_ACRTIMP errno_t       __cdecl _mbstowcs_s_l(size_t*,wchar_t*,size_t,const char*,size_t,_locale_t);
 _ACRTIMP int           __cdecl mbtowc(wchar_t*,const char*,size_t);
+_ACRTIMP int           __cdecl _mbtowc_l(wchar_t*,const char*,size_t,_locale_t);
 _ACRTIMP float         __cdecl wcstof(const wchar_t*,wchar_t**);
 _ACRTIMP double        __cdecl wcstod(const wchar_t*,wchar_t**);
 _ACRTIMP __msvcrt_long __cdecl wcstol(const wchar_t*,wchar_t**,int);

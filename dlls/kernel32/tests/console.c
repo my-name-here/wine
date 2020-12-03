@@ -268,12 +268,26 @@ static void testWriteSimple(HANDLE hCon)
     const char*	mytest = "abcdefg";
     int mylen = strlen(mytest);
     COORD c = {0, 0};
+    DWORD len;
+    BOOL ret;
 
     simple_write_console(hCon, mytest);
 
     for (c.X = 0; c.X < mylen; c.X++)
     {
         okCHAR(hCon, c, mytest[c.X], TEST_ATTRIB);
+    }
+
+    okCURSOR(hCon, c);
+    okCHAR(hCon, c, ' ', DEFAULT_ATTRIB);
+
+    ret = WriteFile(hCon, mytest, mylen, &len, NULL);
+    ok(ret, "WriteFile failed: %u\n", GetLastError());
+    ok(len == mylen, "unexpected len = %u\n", len);
+
+    for (c.X = 0; c.X < 2 * mylen; c.X++)
+    {
+        okCHAR(hCon, c, mytest[c.X % mylen], TEST_ATTRIB);
     }
 
     okCURSOR(hCon, c);
@@ -3776,15 +3790,20 @@ static void test_GetConsoleScreenBufferInfoEx(HANDLE std_output)
 
 static void test_FreeConsole(void)
 {
-    HANDLE handle, unbound_output = NULL;
-    DWORD size, mode;
+    HANDLE handle, unbound_output = NULL, unbound_input = NULL;
+    DWORD size, mode, type;
     WCHAR title[16];
+    char buf[32];
     HWND hwnd;
     UINT cp;
     BOOL ret;
 
     ok(RtlGetCurrentPeb()->ProcessParameters->ConsoleHandle != NULL, "ConsoleHandle is NULL\n");
-    if (!skip_nt) unbound_output = create_unbound_handle(TRUE, TRUE);
+    if (!skip_nt)
+    {
+        unbound_input  = create_unbound_handle(FALSE, TRUE);
+        unbound_output = create_unbound_handle(TRUE, TRUE);
+    }
 
     ret = FreeConsole();
     ok(ret, "FreeConsole failed: %u\n", GetLastError());
@@ -3865,10 +3884,31 @@ static void test_FreeConsole(void)
     handle = GetConsoleInputWaitHandle();
     ok(!handle, "GetConsoleInputWaitHandle returned %p\n", handle);
 
+    ret = ReadFile(unbound_input, buf, sizeof(buf), &size, NULL);
+    ok(!ret && GetLastError() == ERROR_INVALID_HANDLE,
+       "ReadFile returned %x %u\n", ret, GetLastError());
+
+    ret = FlushFileBuffers(unbound_input);
+    ok(!ret && GetLastError() == ERROR_INVALID_HANDLE,
+       "ReadFile returned %x %u\n", ret, GetLastError());
+
+    ret = WriteFile(unbound_input, "test", 4, &size, NULL);
+    ok(!ret && GetLastError() == ERROR_INVALID_HANDLE,
+       "ReadFile returned %x %u\n", ret, GetLastError());
+
+    ret = GetConsoleMode(unbound_input, &mode);
+    ok(!ret && GetLastError() == ERROR_INVALID_HANDLE,
+       "GetConsoleMode returned %x %u\n", ret, GetLastError());
     ret = GetConsoleMode(unbound_output, &mode);
     ok(!ret && GetLastError() == ERROR_INVALID_HANDLE,
        "GetConsoleMode returned %x %u\n", ret, GetLastError());
 
+    type = GetFileType(unbound_input);
+    ok(type == FILE_TYPE_CHAR, "GetFileType returned %u\n", type);
+    type = GetFileType(unbound_output);
+    ok(type == FILE_TYPE_CHAR, "GetFileType returned %u\n", type);
+
+    CloseHandle(unbound_input);
     CloseHandle(unbound_output);
 }
 

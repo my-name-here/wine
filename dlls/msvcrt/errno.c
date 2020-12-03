@@ -130,8 +130,8 @@ static MSVCRT_invalid_parameter_handler invalid_parameter_handler = NULL;
 /* INTERNAL: Set the crt and dos errno's from the OS error given. */
 void msvcrt_set_errno(int err)
 {
-  int *errno_ptr = MSVCRT__errno();
-  MSVCRT_ulong *doserrno = MSVCRT___doserrno();
+  int *errno_ptr = _errno();
+  __msvcrt_ulong *doserrno = __doserrno();
 
   *doserrno = err;
 
@@ -150,7 +150,7 @@ void msvcrt_set_errno(int err)
     ERR_CASE(ERROR_NOT_LOCKED)
     ERR_CASE(ERROR_INVALID_ACCESS)
     ERR_CASE(ERROR_SHARING_VIOLATION)
-    ERR_MAPS(ERROR_LOCK_VIOLATION,       MSVCRT_EACCES);
+    ERR_MAPS(ERROR_LOCK_VIOLATION,       EACCES);
     ERR_CASE(ERROR_FILE_NOT_FOUND)
     ERR_CASE(ERROR_NO_MORE_FILES)
     ERR_CASE(ERROR_BAD_PATHNAME)
@@ -158,33 +158,33 @@ void msvcrt_set_errno(int err)
     ERR_CASE(ERROR_INVALID_DRIVE)
     ERR_CASE(ERROR_BAD_NET_NAME)
     ERR_CASE(ERROR_FILENAME_EXCED_RANGE)
-    ERR_MAPS(ERROR_PATH_NOT_FOUND,       MSVCRT_ENOENT);
-    ERR_MAPS(ERROR_IO_DEVICE,            MSVCRT_EIO);
-    ERR_MAPS(ERROR_BAD_FORMAT,           MSVCRT_ENOEXEC);
-    ERR_MAPS(ERROR_INVALID_HANDLE,       MSVCRT_EBADF);
+    ERR_MAPS(ERROR_PATH_NOT_FOUND,       ENOENT);
+    ERR_MAPS(ERROR_IO_DEVICE,            EIO);
+    ERR_MAPS(ERROR_BAD_FORMAT,           ENOEXEC);
+    ERR_MAPS(ERROR_INVALID_HANDLE,       EBADF);
     ERR_CASE(ERROR_OUTOFMEMORY)
     ERR_CASE(ERROR_INVALID_BLOCK)
     ERR_CASE(ERROR_NOT_ENOUGH_QUOTA)
-    ERR_MAPS(ERROR_ARENA_TRASHED,        MSVCRT_ENOMEM);
-    ERR_MAPS(ERROR_BUSY,                 MSVCRT_EBUSY);
+    ERR_MAPS(ERROR_ARENA_TRASHED,        ENOMEM);
+    ERR_MAPS(ERROR_BUSY,                 EBUSY);
     ERR_CASE(ERROR_ALREADY_EXISTS)
-    ERR_MAPS(ERROR_FILE_EXISTS,          MSVCRT_EEXIST);
-    ERR_MAPS(ERROR_BAD_DEVICE,           MSVCRT_ENODEV);
-    ERR_MAPS(ERROR_TOO_MANY_OPEN_FILES,  MSVCRT_EMFILE);
-    ERR_MAPS(ERROR_DISK_FULL,            MSVCRT_ENOSPC);
-    ERR_MAPS(ERROR_BROKEN_PIPE,          MSVCRT_EPIPE);
-    ERR_MAPS(ERROR_POSSIBLE_DEADLOCK,    MSVCRT_EDEADLK);
-    ERR_MAPS(ERROR_DIR_NOT_EMPTY,        MSVCRT_ENOTEMPTY);
-    ERR_MAPS(ERROR_BAD_ENVIRONMENT,      MSVCRT_E2BIG);
+    ERR_MAPS(ERROR_FILE_EXISTS,          EEXIST);
+    ERR_MAPS(ERROR_BAD_DEVICE,           ENODEV);
+    ERR_MAPS(ERROR_TOO_MANY_OPEN_FILES,  EMFILE);
+    ERR_MAPS(ERROR_DISK_FULL,            ENOSPC);
+    ERR_MAPS(ERROR_BROKEN_PIPE,          EPIPE);
+    ERR_MAPS(ERROR_POSSIBLE_DEADLOCK,    EDEADLK);
+    ERR_MAPS(ERROR_DIR_NOT_EMPTY,        ENOTEMPTY);
+    ERR_MAPS(ERROR_BAD_ENVIRONMENT,      E2BIG);
     ERR_CASE(ERROR_WAIT_NO_CHILDREN)
-    ERR_MAPS(ERROR_CHILD_NOT_COMPLETE,   MSVCRT_ECHILD);
+    ERR_MAPS(ERROR_CHILD_NOT_COMPLETE,   ECHILD);
     ERR_CASE(ERROR_NO_PROC_SLOTS)
     ERR_CASE(ERROR_MAX_THRDS_REACHED)
-    ERR_MAPS(ERROR_NESTING_NOT_ALLOWED,  MSVCRT_EAGAIN);
+    ERR_MAPS(ERROR_NESTING_NOT_ALLOWED,  EAGAIN);
   default:
     /*  Remaining cases map to EINVAL */
     /* FIXME: may be missing some errors above */
-    *errno_ptr = MSVCRT_EINVAL;
+    *errno_ptr = EINVAL;
   }
 }
 
@@ -211,7 +211,7 @@ char** CDECL __sys_errlist(void)
 /*********************************************************************
  *		_errno (MSVCRT.@)
  */
-int* CDECL MSVCRT__errno(void)
+int* CDECL _errno(void)
 {
     return &msvcrt_get_thread_data()->thread_errno;
 }
@@ -219,7 +219,7 @@ int* CDECL MSVCRT__errno(void)
 /*********************************************************************
  *		__doserrno (MSVCRT.@)
  */
-MSVCRT_ulong* CDECL MSVCRT___doserrno(void)
+__msvcrt_ulong* CDECL __doserrno(void)
 {
     return &msvcrt_get_thread_data()->thread_doserrno;
 }
@@ -230,9 +230,9 @@ MSVCRT_ulong* CDECL MSVCRT___doserrno(void)
 int CDECL _get_errno(int *pValue)
 {
     if (!pValue)
-        return MSVCRT_EINVAL;
+        return EINVAL;
 
-    *pValue = *MSVCRT__errno();
+    *pValue = *_errno();
     return 0;
 }
 
@@ -242,9 +242,9 @@ int CDECL _get_errno(int *pValue)
 int CDECL _get_doserrno(int *pValue)
 {
     if (!pValue)
-        return MSVCRT_EINVAL;
+        return EINVAL;
 
-    *pValue = *MSVCRT___doserrno();
+    *pValue = *__doserrno();
     return 0;
 }
 
@@ -253,7 +253,7 @@ int CDECL _get_doserrno(int *pValue)
  */
 int CDECL _set_errno(int value)
 {
-    *MSVCRT__errno() = value;
+    *_errno() = value;
     return 0;
 }
 
@@ -262,19 +262,19 @@ int CDECL _set_errno(int value)
  */
 int CDECL _set_doserrno(int value)
 {
-    *MSVCRT___doserrno() = value;
+    *__doserrno() = value;
     return 0;
 }
 
 /*********************************************************************
  *		strerror (MSVCRT.@)
  */
-char* CDECL MSVCRT_strerror(int err)
+char* CDECL strerror(int err)
 {
     thread_data_t *data = msvcrt_get_thread_data();
 
     if (!data->strerror_buffer)
-        if (!(data->strerror_buffer = MSVCRT_malloc(256))) return NULL;
+        if (!(data->strerror_buffer = malloc(256))) return NULL;
 
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
     strcpy( data->strerror_buffer, MSVCRT__sys_errlist[err] );
@@ -284,14 +284,14 @@ char* CDECL MSVCRT_strerror(int err)
 /**********************************************************************
  *		strerror_s	(MSVCRT.@)
  */
-int CDECL MSVCRT_strerror_s(char *buffer, MSVCRT_size_t numberOfElements, int errnum)
+int CDECL strerror_s(char *buffer, size_t numberOfElements, int errnum)
 {
     char *ptr;
 
     if (!buffer || !numberOfElements)
     {
-        *MSVCRT__errno() = MSVCRT_EINVAL;
-        return MSVCRT_EINVAL;
+        *_errno() = EINVAL;
+        return EINVAL;
     }
 
     if (errnum < 0 || errnum > MSVCRT__sys_nerr)
@@ -311,13 +311,13 @@ int CDECL MSVCRT_strerror_s(char *buffer, MSVCRT_size_t numberOfElements, int er
 /**********************************************************************
  *		_strerror	(MSVCRT.@)
  */
-char* CDECL MSVCRT__strerror(const char* str)
+char* CDECL _strerror(const char* str)
 {
     thread_data_t *data = msvcrt_get_thread_data();
     int err;
 
     if (!data->strerror_buffer)
-        if (!(data->strerror_buffer = MSVCRT_malloc(256))) return NULL;
+        if (!(data->strerror_buffer = malloc(256))) return NULL;
 
     err = data->thread_errno;
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
@@ -333,9 +333,9 @@ char* CDECL MSVCRT__strerror(const char* str)
 /*********************************************************************
  *		perror (MSVCRT.@)
  */
-void CDECL MSVCRT_perror(const char* str)
+void CDECL perror(const char* str)
 {
-    int err = *MSVCRT__errno();
+    int err = *_errno();
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
 
     if (str && *str)
@@ -350,9 +350,9 @@ void CDECL MSVCRT_perror(const char* str)
 /*********************************************************************
  *		_wperror (MSVCRT.@)
  */
-void CDECL MSVCRT__wperror(const MSVCRT_wchar_t* str)
+void CDECL _wperror(const wchar_t* str)
 {
-    MSVCRT_size_t size;
+    size_t size;
     char *buffer = NULL;
 
     if (str && *str)
@@ -360,25 +360,25 @@ void CDECL MSVCRT__wperror(const MSVCRT_wchar_t* str)
         size = MSVCRT_wcstombs(NULL, str, 0);
         if (size == -1) return;
         size++;
-        buffer = MSVCRT_malloc(size);
+        buffer = malloc(size);
         if (!buffer) return;
         if (MSVCRT_wcstombs(buffer, str, size) == -1)
         {
-            MSVCRT_free(buffer);
+            free(buffer);
             return;
         }
     }
-    MSVCRT_perror(buffer);
-    MSVCRT_free(buffer);
+    perror(buffer);
+    free(buffer);
 }
 
 /*********************************************************************
  *		_wcserror_s (MSVCRT.@)
  */
-int CDECL MSVCRT__wcserror_s(MSVCRT_wchar_t* buffer, MSVCRT_size_t nc, int err)
+int CDECL _wcserror_s(wchar_t* buffer, size_t nc, int err)
 {
-    if (!MSVCRT_CHECK_PMT(buffer != NULL)) return MSVCRT_EINVAL;
-    if (!MSVCRT_CHECK_PMT(nc > 0)) return MSVCRT_EINVAL;
+    if (!MSVCRT_CHECK_PMT(buffer != NULL)) return EINVAL;
+    if (!MSVCRT_CHECK_PMT(nc > 0)) return EINVAL;
 
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
     MultiByteToWideChar(CP_ACP, 0, MSVCRT__sys_errlist[err], -1, buffer, nc);
@@ -388,45 +388,43 @@ int CDECL MSVCRT__wcserror_s(MSVCRT_wchar_t* buffer, MSVCRT_size_t nc, int err)
 /*********************************************************************
  *		_wcserror (MSVCRT.@)
  */
-MSVCRT_wchar_t* CDECL MSVCRT__wcserror(int err)
+wchar_t* CDECL _wcserror(int err)
 {
     thread_data_t *data = msvcrt_get_thread_data();
 
     if (!data->wcserror_buffer)
-        if (!(data->wcserror_buffer = MSVCRT_malloc(256 * sizeof(MSVCRT_wchar_t)))) return NULL;
-    MSVCRT__wcserror_s(data->wcserror_buffer, 256, err);
+        if (!(data->wcserror_buffer = malloc(256 * sizeof(wchar_t)))) return NULL;
+    _wcserror_s(data->wcserror_buffer, 256, err);
     return data->wcserror_buffer;
 }
 
 /**********************************************************************
  *		__wcserror_s	(MSVCRT.@)
  */
-int CDECL MSVCRT___wcserror_s(MSVCRT_wchar_t* buffer, MSVCRT_size_t nc, const MSVCRT_wchar_t* str)
+int CDECL __wcserror_s(wchar_t* buffer, size_t nc, const wchar_t* str)
 {
     int err;
-    static const WCHAR colonW[] = {':', ' ', '\0'};
-    static const WCHAR nlW[] = {'\n', '\0'};
     size_t len;
 
-    err = *MSVCRT__errno();
+    err = *_errno();
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
 
     len = MultiByteToWideChar(CP_ACP, 0, MSVCRT__sys_errlist[err], -1, NULL, 0) + 1 /* \n */;
     if (str && *str) len += MSVCRT_wcslen(str) + 2 /* ': ' */;
     if (len > nc)
     {
-        MSVCRT_INVALID_PMT("buffer[nc] is too small", MSVCRT_ERANGE);
-        return MSVCRT_ERANGE;
+        MSVCRT_INVALID_PMT("buffer[nc] is too small", ERANGE);
+        return ERANGE;
     }
     if (str && *str)
     {
         lstrcpyW(buffer, str);
-        lstrcatW(buffer, colonW);
+        lstrcatW(buffer, L": ");
     }
     else buffer[0] = '\0';
     len = MSVCRT_wcslen(buffer);
     MultiByteToWideChar(CP_ACP, 0, MSVCRT__sys_errlist[err], -1, buffer + len, 256 - len);
-    lstrcatW(buffer, nlW);
+    lstrcatW(buffer, L"\n");
 
     return 0;
 }
@@ -434,15 +432,15 @@ int CDECL MSVCRT___wcserror_s(MSVCRT_wchar_t* buffer, MSVCRT_size_t nc, const MS
 /**********************************************************************
  *		__wcserror	(MSVCRT.@)
  */
-MSVCRT_wchar_t* CDECL MSVCRT___wcserror(const MSVCRT_wchar_t* str)
+wchar_t* CDECL __wcserror(const wchar_t* str)
 {
     thread_data_t *data = msvcrt_get_thread_data();
     int err;
 
     if (!data->wcserror_buffer)
-        if (!(data->wcserror_buffer = MSVCRT_malloc(256 * sizeof(MSVCRT_wchar_t)))) return NULL;
+        if (!(data->wcserror_buffer = malloc(256 * sizeof(wchar_t)))) return NULL;
 
-    err = MSVCRT___wcserror_s(data->wcserror_buffer, 256, str);
+    err = __wcserror_s(data->wcserror_buffer, 256, str);
     if (err) FIXME("bad wcserror call (%d)\n", err);
 
     return data->wcserror_buffer;
@@ -459,8 +457,8 @@ void CDECL _seterrormode(int mode)
 /******************************************************************************
  *		_invalid_parameter (MSVCRT.@)
  */
-void __cdecl MSVCRT__invalid_parameter(const MSVCRT_wchar_t *expr, const MSVCRT_wchar_t *func,
-                                       const MSVCRT_wchar_t *file, unsigned int line, uintptr_t arg)
+void __cdecl _invalid_parameter(const wchar_t *expr, const wchar_t *func,
+                                       const wchar_t *file, unsigned int line, uintptr_t arg)
 {
 #if _MSVCR_VER >= 140
     thread_data_t *data = msvcrt_get_thread_data();
@@ -489,7 +487,7 @@ void __cdecl MSVCRT__invalid_parameter(const MSVCRT_wchar_t *expr, const MSVCRT_
  */
 void CDECL _invalid_parameter_noinfo(void)
 {
-    MSVCRT__invalid_parameter( NULL, NULL, NULL, 0, 0 );
+    _invalid_parameter( NULL, NULL, NULL, 0, 0 );
 }
 
 /*********************************************************************
@@ -497,8 +495,8 @@ void CDECL _invalid_parameter_noinfo(void)
  */
 void CDECL _invalid_parameter_noinfo_noreturn(void)
 {
-    MSVCRT__invalid_parameter( NULL, NULL, NULL, 0, 0 );
-    MSVCRT__exit( STATUS_INVALID_CRUNTIME_PARAMETER );
+    _invalid_parameter( NULL, NULL, NULL, 0, 0 );
+    _exit( STATUS_INVALID_CRUNTIME_PARAMETER );
 }
 
 /*********************************************************************

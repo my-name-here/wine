@@ -18,7 +18,6 @@
 
 
 #define COBJMACROS
-#include "config.h"
 
 #include <stdarg.h>
 
@@ -301,6 +300,20 @@ HRESULT JpegEncoder_CreateInstance(REFIID iid, void** ppv)
     struct encoder_info encoder_info;
 
     hr = get_unix_encoder(&CLSID_WICJpegEncoder, &encoder_info, &encoder);
+
+    if (SUCCEEDED(hr))
+        hr = CommonEncoder_CreateInstance(encoder, &encoder_info, iid, ppv);
+
+    return hr;
+}
+
+HRESULT IcnsEncoder_CreateInstance(REFIID iid, void** ppv)
+{
+    HRESULT hr;
+    struct encoder *encoder;
+    struct encoder_info encoder_info;
+
+    hr = get_unix_encoder(&CLSID_WICIcnsEncoder, &encoder_info, &encoder);
 
     if (SUCCEEDED(hr))
         hr = CommonEncoder_CreateInstance(encoder, &encoder_info, iid, ppv);

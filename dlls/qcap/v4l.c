@@ -19,6 +19,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#if 0
+#pragma makedep unix
+#endif
+
 #define BIONIC_IOCTL_NO_SIGNEDNESS_OVERLOAD  /* work around ioctl breakage on Android */
 
 #include "config.h"
@@ -47,7 +51,11 @@
 #include <unistd.h>
 #endif
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "initguid.h"
 #include "qcap_private.h"
+#include "winternl.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(qcap);
 
@@ -111,14 +119,14 @@ static int xioctl(int fd, int request, void * arg)
     return r;
 }
 
-static void v4l_device_destroy(struct video_capture_device *device)
+static void CDECL v4l_device_destroy(struct video_capture_device *device)
 {
     if (device->fd != -1)
         video_close(device->fd);
     if (device->caps_count)
-        heap_free(device->caps);
-    heap_free(device->image_data);
-    heap_free(device);
+        free(device->caps);
+    free(device->image_data);
+    free(device);
 }
 
 static const struct caps *find_caps(struct video_capture_device *device, const AM_MEDIA_TYPE *mt)
@@ -141,7 +149,7 @@ static const struct caps *find_caps(struct video_capture_device *device, const A
     return NULL;
 }
 
-static HRESULT v4l_device_check_format(struct video_capture_device *device, const AM_MEDIA_TYPE *mt)
+static HRESULT CDECL v4l_device_check_format(struct video_capture_device *device, const AM_MEDIA_TYPE *mt)
 {
     TRACE("device %p, mt %p.\n", device, mt);
 
@@ -167,7 +175,7 @@ static HRESULT set_caps(struct video_capture_device *device, const struct caps *
     height = caps->video_info.bmiHeader.biHeight;
     image_size = width * height * caps->video_info.bmiHeader.biBitCount / 8;
 
-    if (!(image_data = heap_alloc(image_size)))
+    if (!(image_data = malloc(image_size)))
     {
         ERR("Failed to allocate memory.\n");
         return E_OUTOFMEMORY;
@@ -183,19 +191,19 @@ static HRESULT set_caps(struct video_capture_device *device, const struct caps *
             || format.fmt.pix.height != height)
     {
         ERR("Failed to set pixel format: %s.\n", strerror(errno));
-        heap_free(image_data);
+        free(image_data);
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
     device->current_caps = caps;
     device->image_size = image_size;
     device->image_pitch = width * caps->video_info.bmiHeader.biBitCount / 8;
-    heap_free(device->image_data);
+    free(device->image_data);
     device->image_data = image_data;
     return S_OK;
 }
 
-static HRESULT v4l_device_set_format(struct video_capture_device *device, const AM_MEDIA_TYPE *mt)
+static HRESULT CDECL v4l_device_set_format(struct video_capture_device *device, const AM_MEDIA_TYPE *mt)
 {
     const struct caps *caps;
 
@@ -209,13 +217,14 @@ static HRESULT v4l_device_set_format(struct video_capture_device *device, const 
     return set_caps(device, caps);
 }
 
-static HRESULT v4l_device_get_format(struct video_capture_device *device, AM_MEDIA_TYPE *mt)
+static void CDECL v4l_device_get_format(struct video_capture_device *device, AM_MEDIA_TYPE *mt, VIDEOINFOHEADER *format)
 {
-    return CopyMediaType(mt, &device->current_caps->media_type);
+    *mt = device->current_caps->media_type;
+    *format = device->current_caps->video_info;
 }
 
-static HRESULT v4l_device_get_media_type(struct video_capture_device *device,
-        unsigned int index, AM_MEDIA_TYPE *mt)
+static HRESULT CDECL v4l_device_get_media_type(struct video_capture_device *device,
+        unsigned int index, AM_MEDIA_TYPE *mt, VIDEOINFOHEADER *format)
 {
     unsigned int caps_count = (device->current_caps) ? 1 : device->caps_count;
 
@@ -223,9 +232,16 @@ static HRESULT v4l_device_get_media_type(struct video_capture_device *device,
         return VFW_S_NO_MORE_ITEMS;
 
     if (device->current_caps)
-        return CopyMediaType(mt, &device->current_caps->media_type);
-
-    return CopyMediaType(mt, &device->caps[index].media_type);
+    {
+        *mt = device->current_caps->media_type;
+        *format = device->current_caps->video_info;
+    }
+    else
+    {
+        *mt = device->caps[index].media_type;
+        *format = device->caps[index].video_info;
+    }
+    return S_OK;
 }
 
 static __u32 v4l2_cid_from_qcap_property(VideoProcAmpProperty property)
@@ -246,7 +262,7 @@ static __u32 v4l2_cid_from_qcap_property(VideoProcAmpProperty property)
     }
 }
 
-static HRESULT v4l_device_get_prop_range(struct video_capture_device *device, VideoProcAmpProperty property,
+static HRESULT CDECL v4l_device_get_prop_range(struct video_capture_device *device, VideoProcAmpProperty property,
         LONG *min, LONG *max, LONG *step, LONG *default_value, LONG *flags)
 {
     struct v4l2_queryctrl ctrl;
@@ -267,7 +283,7 @@ static HRESULT v4l_device_get_prop_range(struct video_capture_device *device, Vi
     return S_OK;
 }
 
-static HRESULT v4l_device_get_prop(struct video_capture_device *device,
+static HRESULT CDECL v4l_device_get_prop(struct video_capture_device *device,
         VideoProcAmpProperty property, LONG *value, LONG *flags)
 {
     struct v4l2_control ctrl;
@@ -286,7 +302,7 @@ static HRESULT v4l_device_get_prop(struct video_capture_device *device,
     return S_OK;
 }
 
-static HRESULT v4l_device_set_prop(struct video_capture_device *device,
+static HRESULT CDECL v4l_device_set_prop(struct video_capture_device *device,
         VideoProcAmpProperty property, LONG value, LONG flags)
 {
     struct v4l2_control ctrl;
@@ -322,7 +338,7 @@ static void reverse_image(struct video_capture_device *device, LPBYTE output, co
     }
 }
 
-static BOOL v4l_device_read_frame(struct video_capture_device *device, BYTE *data)
+static BOOL CDECL v4l_device_read_frame(struct video_capture_device *device, BYTE *data)
 {
     while (video_read(device->fd, device->image_data, device->image_size) < 0)
     {
@@ -373,27 +389,20 @@ static void fill_caps(__u32 pixelformat, __u32 width, __u32 height,
     caps->pixelformat = pixelformat;
 }
 
-static HRESULT v4l_device_get_caps(struct video_capture_device *device, LONG index,
-        AM_MEDIA_TYPE **type, VIDEO_STREAM_CONFIG_CAPS *vscc)
+static void CDECL v4l_device_get_caps(struct video_capture_device *device, LONG index,
+        AM_MEDIA_TYPE *type, VIDEOINFOHEADER *format, VIDEO_STREAM_CONFIG_CAPS *vscc)
 {
-    if (index >= device->caps_count)
-        return S_FALSE;
-
-    *type = CreateMediaType(&device->caps[index].media_type);
-    if (!*type)
-        return E_OUTOFMEMORY;
-
-    if (vscc)
-        memcpy(vscc, &device->caps[index].config, sizeof(VIDEO_STREAM_CONFIG_CAPS));
-    return S_OK;
+    *vscc = device->caps[index].config;
+    *type = device->caps[index].media_type;
+    *format = device->caps[index].video_info;
 }
 
-static LONG v4l_device_get_caps_count(struct video_capture_device *device)
+static LONG CDECL v4l_device_get_caps_count(struct video_capture_device *device)
 {
     return device->caps_count;
 }
 
-struct video_capture_device *v4l_device_create(USHORT index)
+struct video_capture_device * CDECL v4l_device_create(USHORT index)
 {
     struct v4l2_frmsizeenum frmsize = {0};
     struct video_capture_device *device;
@@ -406,7 +415,7 @@ struct video_capture_device *v4l_device_create(USHORT index)
 
     have_libv4l2 = video_init();
 
-    if (!(device = heap_alloc_zero(sizeof(*device))))
+    if (!(device = calloc(1, sizeof(*device))))
         return NULL;
 
     sprintf(path, "/dev/video%i", index);
@@ -508,7 +517,7 @@ struct video_capture_device *v4l_device_create(USHORT index)
         else
             ERR("Failed to get fps: %s.\n", strerror(errno));
 
-        new_caps = heap_realloc(device->caps, (device->caps_count + 1) * sizeof(*device->caps));
+        new_caps = realloc(device->caps, (device->caps_count + 1) * sizeof(*device->caps));
         if (!new_caps)
             goto error;
         device->caps = new_caps;
@@ -557,17 +566,12 @@ const struct video_capture_funcs v4l_funcs =
     .read_frame = v4l_device_read_frame,
 };
 
-#else
-
-static struct video_capture_device *v4l_device_create(USHORT index)
+NTSTATUS CDECL __wine_init_unix_lib(HMODULE module, DWORD reason, const void *ptr_in, void *ptr_out)
 {
-    ERR("v4l2 was not present at compilation time.\n");
-    return NULL;
+    if (reason != DLL_PROCESS_ATTACH) return STATUS_SUCCESS;
+
+    *(const struct video_capture_funcs **)ptr_out = &v4l_funcs;
+    return STATUS_SUCCESS;
 }
 
-const struct video_capture_funcs v4l_funcs =
-{
-    .create = v4l_device_create,
-};
-
-#endif /* defined(VIDIOCMCAPTURE) */
+#endif /* HAVE_LINUX_VIDEODEV2_H */

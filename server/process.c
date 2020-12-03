@@ -778,7 +778,7 @@ struct process *get_process_from_id( process_id_t id )
     struct object *obj = get_ptid_entry( id );
 
     if (obj && obj->ops == &process_ops) return (struct process *)grab_object( obj );
-    set_error( STATUS_INVALID_PARAMETER );
+    set_error( STATUS_INVALID_CID );
     return NULL;
 }
 
@@ -915,9 +915,7 @@ static void process_killed( struct process *process )
     if (process->exe_file) release_object( process->exe_file );
     process->idle_event = NULL;
     process->exe_file = NULL;
-
-    /* close the console attached to this process, if any */
-    free_console( process );
+    assert( !process->console );
 
     while ((ptr = list_head( &process->rawinput_devices )))
     {
