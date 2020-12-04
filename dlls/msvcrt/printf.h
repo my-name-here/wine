@@ -115,7 +115,7 @@ static inline int wcstombs_len(char *mbstr, const wchar_t *wcstr,
     int i, r, mblen = 0;
 
     for(i=0; i<len; i++) {
-        r = MSVCRT__wctomb_l(mbstr ? mbstr+mblen : buf, wcstr[i], locale);
+        r = _wctomb_l(mbstr ? mbstr+mblen : buf, wcstr[i], locale);
         if(r < 0) return r;
         mblen += r;
     }
@@ -189,9 +189,9 @@ static inline int FUNC_NAME(pf_output_format_wstr)(FUNC_NAME(puts_clbk) pf_puts,
     if(len < 0) {
         /* Do not search past the length specified by the precision. */
         if(flags->Precision>=0)
-            len = MSVCRT_wcsnlen(str, flags->Precision);
+            len = wcsnlen(str, flags->Precision);
         else
-            len = MSVCRT_wcslen(str);
+            len = wcslen(str);
     }
 
     if(flags->Precision>=0 && flags->Precision<len)
@@ -603,7 +603,7 @@ static inline int FUNC_NAME(pf_output_fp)(FUNC_NAME(puts_clbk) pf_puts, void *pu
     if(flags->Precision == -1)
         flags->Precision = 6;
 
-    v = MSVCRT_frexp(v, &e2);
+    v = frexp(v, &e2);
     if(v) {
         m = (ULONGLONG)1 << (MANT_BITS - 1);
         m |= (*(ULONGLONG*)&v & (((ULONGLONG)1 << (MANT_BITS - 1)) - 1));
@@ -635,7 +635,7 @@ static inline int FUNC_NAME(pf_output_fp)(FUNC_NAME(puts_clbk) pf_puts, void *pu
     if(!b->data[bnum_idx(b, b->e-1)])
         first_limb_len = 1;
     else
-        first_limb_len = MSVCRT_floor(MSVCRT_log10(b->data[bnum_idx(b, b->e - 1)])) + 1;
+        first_limb_len = floor(log10(b->data[bnum_idx(b, b->e - 1)])) + 1;
     radix_pos = first_limb_len + LIMB_DIGITS + e10;
 
     round_pos = flags->Precision;
@@ -700,7 +700,7 @@ static inline int FUNC_NAME(pf_output_fp)(FUNC_NAME(puts_clbk) pf_puts, void *pu
                 if(!b->data[bnum_idx(b, b->e-1)])
                     i = 1;
                 else
-                    i = MSVCRT_floor(MSVCRT_log10(b->data[bnum_idx(b, b->e-1)])) + 1;
+                    i = floor(log10(b->data[bnum_idx(b, b->e-1)])) + 1;
                 if(i != first_limb_len) {
                     first_limb_len = i;
                     radix_pos++;
@@ -966,7 +966,7 @@ int FUNC_NAME(pf_printf)(FUNC_NAME(puts_clbk) pf_puts, void *puts_ctx, const API
     BOOL standard_rounding = options & _CRT_INTERNAL_PRINTF_STANDARD_ROUNDING;
 #else
     BOOL legacy_wide = TRUE, legacy_msvcrt_compat = TRUE;
-    BOOL three_digit_exp = _get_output_format() != MSVCRT__TWO_DIGIT_EXPONENT;
+    BOOL three_digit_exp = _get_output_format() != _TWO_DIGIT_EXPONENT;
     BOOL standard_rounding = FALSE;
 #endif
 

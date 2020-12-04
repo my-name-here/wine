@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <mbctype.h>
+#include <mbstring.h>
 
 #include "msvcrt.h"
 #include "mtdll.h"
@@ -256,7 +257,7 @@ threadmbcinfo* create_mbcinfo(int cp, LCID lcid, threadmbcinfo *old_mbcinfo)
   }
 
   if(lcid == -1) {
-    MSVCRT_sprintf(bufA, ".%d", newcp);
+    sprintf(bufA, ".%d", newcp);
     mbcinfo->mblcid = locale_to_LCID(bufA, NULL, NULL);
   } else {
     mbcinfo->mblcid = lcid;
@@ -577,7 +578,7 @@ unsigned char* CDECL _mbsdec(const unsigned char* start, const unsigned char* cu
 /*********************************************************************
  *		_mbclen(MSVCRT.@)
  */
-unsigned int CDECL _mbclen(const unsigned char* str)
+size_t CDECL _mbclen(const unsigned char* str)
 {
   return _ismbblead(*str) ? 2 : 1;
 }
@@ -1454,7 +1455,7 @@ int CDECL _ismbbkana(unsigned int c)
  */
 int CDECL _ismbcdigit_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswdigit_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswdigit_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1470,7 +1471,7 @@ int CDECL _ismbcdigit(unsigned int ch)
  */
 int CDECL _ismbcgraph_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswgraph_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswgraph_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1486,7 +1487,7 @@ int CDECL _ismbcgraph(unsigned int ch)
  */
 int CDECL _ismbcalpha_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswalpha_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswalpha_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1502,7 +1503,7 @@ int CDECL _ismbcalpha(unsigned int ch)
  */
 int CDECL _ismbclower_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswlower_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswlower_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1518,7 +1519,7 @@ int CDECL _ismbclower(unsigned int ch)
  */
 int CDECL _ismbcupper_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswupper_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswupper_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1549,7 +1550,7 @@ int CDECL _ismbcsymbol(unsigned int ch)
  */
 int CDECL _ismbcalnum_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswalnum_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswalnum_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1565,7 +1566,7 @@ int CDECL _ismbcalnum(unsigned int ch)
  */
 int CDECL _ismbcspace_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswspace_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswspace_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1581,7 +1582,7 @@ int CDECL _ismbcspace(unsigned int ch)
  */
 int CDECL _ismbcprint_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswprint_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswprint_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -1597,7 +1598,7 @@ int CDECL _ismbcprint(unsigned int ch)
  */
 int CDECL _ismbcpunct_l(unsigned int ch, _locale_t locale)
 {
-    return MSVCRT__iswpunct_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
+    return _iswpunct_l( msvcrt_mbc_to_wc_l(ch, locale), locale );
 }
 
 /*********************************************************************
@@ -2597,7 +2598,7 @@ int CDECL _mbstowcs_s_l(size_t *ret, wchar_t *wcstr,
         return EINVAL;
     }
 
-    if(count==MSVCRT__TRUNCATE || size<count)
+    if(count==_TRUNCATE || size<count)
         conv = size;
     else
         conv = count;
@@ -2605,7 +2606,7 @@ int CDECL _mbstowcs_s_l(size_t *ret, wchar_t *wcstr,
     conv = _mbstowcs_l(wcstr, mbstr, conv, locale);
     if(conv<size)
         wcstr[conv++] = '\0';
-    else if(conv==size && count==MSVCRT__TRUNCATE && wcstr[conv-1]!='\0') {
+    else if(conv==size && count==_TRUNCATE && wcstr[conv-1]!='\0') {
         wcstr[conv-1] = '\0';
         err = STRUNCATE;
     }else if(conv==size && wcstr[conv-1]!='\0') {

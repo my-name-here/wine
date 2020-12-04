@@ -452,6 +452,9 @@ enum wined3d_shader_backend
     WINED3D_SHADER_BACKEND_NONE,
 };
 
+#define WINED3D_CSMT_ENABLE    0x00000001
+#define WINED3D_CSMT_SERIALIZE 0x00000002
+
 /* NOTE: When adding fields to this structure, make sure to update the default
  * values in wined3d_main.c as well. */
 struct wined3d_settings
@@ -1572,9 +1575,13 @@ do {                                                                \
 struct wined3d_bo_gl
 {
     GLuint id;
+    GLsizeiptr size;
     GLenum binding;
     GLenum usage;
 
+    GLbitfield flags;
+    bool coherent;
+    struct list users;
     uint64_t command_fence_id;
 };
 
@@ -1583,7 +1590,7 @@ static inline GLuint wined3d_bo_gl_id(uintptr_t bo)
     return bo ? ((struct wined3d_bo_gl *)bo)->id : 0;
 }
 
-struct wined3d_bo_user_vk
+struct wined3d_bo_user
 {
     struct list entry;
     bool valid;
@@ -3012,6 +3019,7 @@ enum wined3d_pci_device
     CARD_NVIDIA_GEFORCE_GTX1050TI   = 0x1c82,
     CARD_NVIDIA_GEFORCE_GTX1060_3GB = 0x1c02,
     CARD_NVIDIA_GEFORCE_GTX1060     = 0x1c03,
+    CARD_NVIDIA_GEFORCE_GTX1060M    = 0x1c20,
     CARD_NVIDIA_GEFORCE_GTX1070     = 0x1b81,
     CARD_NVIDIA_GEFORCE_GTX1080     = 0x1b80,
     CARD_NVIDIA_GEFORCE_GTX1080M    = 0x1be0,
@@ -4670,6 +4678,7 @@ struct wined3d_cs
     HMODULE wined3d_module;
     HANDLE thread;
     DWORD thread_id;
+    BOOL serialize_commands;
 
     struct wined3d_cs_queue queue[WINED3D_CS_QUEUE_COUNT];
     size_t data_size, start, end;
@@ -4874,6 +4883,7 @@ struct wined3d_buffer_gl
     struct wined3d_buffer b;
 
     struct wined3d_bo_gl bo;
+    struct wined3d_bo_user bo_user;
 };
 
 static inline struct wined3d_buffer_gl *wined3d_buffer_gl(struct wined3d_buffer *buffer)
@@ -4897,7 +4907,7 @@ struct wined3d_buffer_vk
     struct wined3d_buffer b;
 
     struct wined3d_bo_vk bo;
-    struct wined3d_bo_user_vk bo_user;
+    struct wined3d_bo_user bo_user;
     VkDescriptorBufferInfo buffer_info;
 };
 
@@ -5011,6 +5021,7 @@ void shader_resource_view_generate_mipmaps(struct wined3d_shader_resource_view *
 struct wined3d_shader_resource_view_gl
 {
     struct wined3d_shader_resource_view v;
+    struct wined3d_bo_user bo_user;
     struct wined3d_gl_view gl_view;
 };
 
@@ -5025,10 +5036,12 @@ void wined3d_shader_resource_view_gl_bind(struct wined3d_shader_resource_view_gl
 HRESULT wined3d_shader_resource_view_gl_init(struct wined3d_shader_resource_view_gl *view_gl,
         const struct wined3d_view_desc *desc, struct wined3d_resource *resource,
         void *parent, const struct wined3d_parent_ops *parent_ops) DECLSPEC_HIDDEN;
+void wined3d_shader_resource_view_gl_update(struct wined3d_shader_resource_view_gl *srv_gl,
+        struct wined3d_context_gl *context_gl) DECLSPEC_HIDDEN;
 
 struct wined3d_view_vk
 {
-    struct wined3d_bo_user_vk bo_user;
+    struct wined3d_bo_user bo_user;
     union
     {
         VkBufferView vk_buffer_view;
@@ -5080,6 +5093,7 @@ void wined3d_unordered_access_view_set_counter(struct wined3d_unordered_access_v
 struct wined3d_unordered_access_view_gl
 {
     struct wined3d_unordered_access_view v;
+    struct wined3d_bo_user bo_user;
     struct wined3d_gl_view gl_view;
     struct wined3d_bo_gl counter_bo;
 };
@@ -5095,6 +5109,8 @@ void wined3d_unordered_access_view_gl_clear_uint(struct wined3d_unordered_access
 HRESULT wined3d_unordered_access_view_gl_init(struct wined3d_unordered_access_view_gl *view_gl,
         const struct wined3d_view_desc *desc, struct wined3d_resource *resource,
         void *parent, const struct wined3d_parent_ops *parent_ops) DECLSPEC_HIDDEN;
+void wined3d_unordered_access_view_gl_update(struct wined3d_unordered_access_view_gl *uav_gl,
+        struct wined3d_context_gl *context_gl) DECLSPEC_HIDDEN;
 
 struct wined3d_unordered_access_view_vk
 {
@@ -6352,5 +6368,7 @@ static inline void wined3d_context_gl_reference_bo(struct wined3d_context_gl *co
 
 /* The WNDCLASS-Name for the fake window which we use to retrieve the GL capabilities */
 #define WINED3D_OPENGL_WINDOW_CLASS_NAME "WineD3D_OpenGL"
+
+extern CRITICAL_SECTION wined3d_command_cs;
 
 #endif

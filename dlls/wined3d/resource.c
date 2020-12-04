@@ -451,10 +451,7 @@ GLbitfield wined3d_resource_gl_map_flags(DWORD d3d_flags)
         ret |= GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT;
     if (d3d_flags & WINED3D_MAP_READ)
         ret |= GL_MAP_READ_BIT;
-
-    if (d3d_flags & WINED3D_MAP_DISCARD)
-        ret |= GL_MAP_INVALIDATE_BUFFER_BIT;
-    if (d3d_flags & WINED3D_MAP_NOOVERWRITE)
+    else
         ret |= GL_MAP_UNSYNCHRONIZED_BIT;
 
     return ret;

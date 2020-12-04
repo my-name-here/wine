@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <fcntl.h>
 #include <math.h>
 #include "msvcrt.h"
 #include <winnls.h>
@@ -108,11 +109,11 @@ wchar_t ** msvcrt_SnapshotOfEnvironmentW(wchar_t **wblk)
   int count = 1, len = 1, i = 0; /* keep space for the trailing NULLS */
   wchar_t *wptr;
 
-  for (wptr = wenviron_strings; *wptr; wptr += MSVCRT_wcslen(wptr) + 1)
+  for (wptr = wenviron_strings; *wptr; wptr += wcslen(wptr) + 1)
   {
     /* Don't count environment variables starting with '=' which are command shell specific */
     if (*wptr != '=') count++;
-    len += MSVCRT_wcslen(wptr) + 1;
+    len += wcslen(wptr) + 1;
   }
   if (wblk)
       wblk = HeapReAlloc( GetProcessHeap(), 0, wblk, count* sizeof(wchar_t*) + len * sizeof(wchar_t));
@@ -123,7 +124,7 @@ wchar_t ** msvcrt_SnapshotOfEnvironmentW(wchar_t **wblk)
       if (count)
 	{
 	  memcpy(&wblk[count],wenviron_strings,len * sizeof(wchar_t));
-	  for (wptr = (wchar_t*)&wblk[count]; *wptr; wptr += MSVCRT_wcslen(wptr) + 1)
+	  for (wptr = (wchar_t*)&wblk[count]; *wptr; wptr += wcslen(wptr) + 1)
 	    {
 	      /* Skip special environment strings set by the command shell */
 	      if (*wptr != '=') wblk[i++] = wptr;
@@ -160,7 +161,7 @@ static char **build_argv( WCHAR **wargv )
 static WCHAR **cmdline_to_argv( const WCHAR *src, int *ret_argc )
 {
     WCHAR **argv, *arg, *dst;
-    int argc, in_quotes = 0, bcount = 0, len = MSVCRT_wcslen(src) + 1;
+    int argc, in_quotes = 0, bcount = 0, len = wcslen(src) + 1;
 
     argc = 2 + len / 2;
     argv = HeapAlloc( GetProcessHeap(), 0, argc * sizeof(*argv) + len * sizeof(WCHAR) );
@@ -276,7 +277,7 @@ int* CDECL __p__fmode(void) { return &MSVCRT__fmode; }
 int CDECL _set_fmode(int mode)
 {
     /* TODO: support _O_WTEXT */
-    if(!MSVCRT_CHECK_PMT(mode==MSVCRT__O_TEXT || mode==MSVCRT__O_BINARY))
+    if(!MSVCRT_CHECK_PMT(mode==_O_TEXT || mode==_O_BINARY))
         return EINVAL;
 
     MSVCRT__fmode = mode;
@@ -408,7 +409,7 @@ void msvcrt_init_args(void)
   OSVERSIONINFOW osvi;
 
   MSVCRT__acmdln = _strdup( GetCommandLineA() );
-  MSVCRT__wcmdln = MSVCRT__wcsdup( GetCommandLineW() );
+  MSVCRT__wcmdln = _wcsdup( GetCommandLineW() );
   initial_wargv  = cmdline_to_argv( GetCommandLineW(), &initial_argc );
   MSVCRT___argc  = initial_argc;
   MSVCRT___wargv = initial_wargv;
@@ -435,7 +436,7 @@ void msvcrt_init_args(void)
   MSVCRT__HUGE = HUGE_VAL;
   MSVCRT___setlc_active = 0;
   MSVCRT___unguarded_readlc_active = 0;
-  MSVCRT__fmode = MSVCRT__O_TEXT;
+  MSVCRT__fmode = _O_TEXT;
 
   MSVCRT__environ = msvcrt_SnapshotOfEnvironmentA(NULL);
   MSVCRT___initenv = msvcrt_SnapshotOfEnvironmentA(NULL);
@@ -486,7 +487,7 @@ static int build_expanded_wargv(int *argc, wchar_t **argv)
         int len = 0;
 
         is_expandable = FALSE;
-        for(path_len = MSVCRT_wcslen(initial_wargv[i])-1; path_len>=0; path_len--) {
+        for(path_len = wcslen(initial_wargv[i])-1; path_len>=0; path_len--) {
             if(initial_wargv[i][path_len]=='*' || initial_wargv[i][path_len]=='?')
                 is_expandable = TRUE;
             else if(initial_wargv[i][path_len]=='\\' || initial_wargv[i][path_len]=='/')
@@ -505,7 +506,7 @@ static int build_expanded_wargv(int *argc, wchar_t **argv)
                             (data.cFileName[1]=='.' && data.cFileName[2]=='\0')))
                     continue;
 
-                len = MSVCRT_wcslen(data.cFileName)+1;
+                len = wcslen(data.cFileName)+1;
                 if(argv) {
                     argv[args_no] = (wchar_t*)(argv+*argc+1)+size;
                     memcpy(argv[args_no], initial_wargv[i], path_len*sizeof(wchar_t));
@@ -518,7 +519,7 @@ static int build_expanded_wargv(int *argc, wchar_t **argv)
         }
 
         if(!len) {
-            len = MSVCRT_wcslen(initial_wargv[i])+1;
+            len = wcslen(initial_wargv[i])+1;
             if(argv) {
                 argv[args_no] = (wchar_t*)(argv+*argc+1)+size;
                 memcpy(argv[args_no], initial_wargv[i], len*sizeof(wchar_t));

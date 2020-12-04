@@ -17,6 +17,7 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
+#include <conio.h>
 #include <process.h>
 #include <signal.h>
 #include <stdio.h>
@@ -31,7 +32,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 #define LOCK_EXIT   _lock(_EXIT_LOCK1)
 #define UNLOCK_EXIT _unlock(_EXIT_LOCK1)
 
-static MSVCRT_purecall_handler purecall_handler = NULL;
+static _purecall_handler purecall_handler = NULL;
 
 static _onexit_table_t MSVCRT_atexit_table;
 
@@ -50,8 +51,8 @@ static CRITICAL_SECTION MSVCRT_onexit_cs = { &MSVCRT_onexit_cs_debug, -1, 0, 0, 
 extern int MSVCRT_app_type;
 extern wchar_t *MSVCRT__wpgmptr;
 
-static unsigned int MSVCRT_abort_behavior =  MSVCRT__WRITE_ABORT_MSG | MSVCRT__CALL_REPORTFAULT;
-static int MSVCRT_error_mode = MSVCRT__OUT_TO_DEFAULT;
+static unsigned int MSVCRT_abort_behavior =  _WRITE_ABORT_MSG | _CALL_REPORTFAULT;
+static int MSVCRT_error_mode = _OUT_TO_DEFAULT;
 
 void (*CDECL _aexit_rtn)(int) = _exit;
 
@@ -193,7 +194,7 @@ static void DoMessageBoxW(const wchar_t *lead, const wchar_t *message)
   wchar_t text[2048];
   INT ret;
 
-  MSVCRT__snwprintf(text, ARRAY_SIZE(text), L"%ls\n\nProgram: %ls\n%ls\n\n"
+  _snwprintf(text, ARRAY_SIZE(text), L"%ls\n\nProgram: %ls\n%ls\n\n"
           L"Press OK to exit the program, or Cancel to start the Wine debugger.\n",
           lead, MSVCRT__wpgmptr, message);
 
@@ -230,11 +231,11 @@ void CDECL _amsg_exit(int errnum)
 {
   TRACE("(%d)\n", errnum);
 
-  if ((MSVCRT_error_mode == MSVCRT__OUT_TO_MSGBOX) ||
-     ((MSVCRT_error_mode == MSVCRT__OUT_TO_DEFAULT) && (MSVCRT_app_type == 2)))
+  if ((MSVCRT_error_mode == _OUT_TO_MSGBOX) ||
+     ((MSVCRT_error_mode == _OUT_TO_DEFAULT) && (MSVCRT_app_type == 2)))
   {
     char text[32];
-    MSVCRT_sprintf(text, "Error: R60%d",errnum);
+    sprintf(text, "Error: R60%d",errnum);
     DoMessageBox("Runtime error!", text);
   }
   else
@@ -249,10 +250,10 @@ void CDECL abort(void)
 {
   TRACE("()\n");
 
-  if (MSVCRT_abort_behavior & MSVCRT__WRITE_ABORT_MSG)
+  if (MSVCRT_abort_behavior & _WRITE_ABORT_MSG)
   {
-    if ((MSVCRT_error_mode == MSVCRT__OUT_TO_MSGBOX) ||
-       ((MSVCRT_error_mode == MSVCRT__OUT_TO_DEFAULT) && (MSVCRT_app_type == 2)))
+    if ((MSVCRT_error_mode == _OUT_TO_MSGBOX) ||
+       ((MSVCRT_error_mode == _OUT_TO_DEFAULT) && (MSVCRT_app_type == 2)))
     {
       DoMessageBox("Runtime error!", "abnormal program termination");
     }
@@ -273,7 +274,7 @@ unsigned int CDECL _set_abort_behavior(unsigned int flags, unsigned int mask)
   unsigned int old = MSVCRT_abort_behavior;
 
   TRACE("%x, %x\n", flags, mask);
-  if (mask & MSVCRT__CALL_REPORTFAULT)
+  if (mask & _CALL_REPORTFAULT)
     FIXME("_WRITE_CALL_REPORTFAULT unhandled\n");
 
   MSVCRT_abort_behavior = (MSVCRT_abort_behavior & ~mask) | (flags & mask);
@@ -288,15 +289,15 @@ void CDECL _wassert(const wchar_t* str, const wchar_t* file, unsigned int line)
 {
   TRACE("(%s,%s,%d)\n", debugstr_w(str), debugstr_w(file), line);
 
-  if ((MSVCRT_error_mode == MSVCRT__OUT_TO_MSGBOX) ||
-     ((MSVCRT_error_mode == MSVCRT__OUT_TO_DEFAULT) && (MSVCRT_app_type == 2)))
+  if ((MSVCRT_error_mode == _OUT_TO_MSGBOX) ||
+     ((MSVCRT_error_mode == _OUT_TO_DEFAULT) && (MSVCRT_app_type == 2)))
   {
     wchar_t text[2048];
-    MSVCRT__snwprintf(text, sizeof(text), L"File: %ls\nLine: %d\n\nExpression: \"%ls\"", file, line, str);
+    _snwprintf(text, sizeof(text), L"File: %ls\nLine: %d\n\nExpression: \"%ls\"", file, line, str);
     DoMessageBoxW(L"Assertion failed!", text);
   }
   else
-    MSVCRT_fwprintf(MSVCRT_stderr, L"Assertion failed: %ls, file %ls, line %d\n\n", str, file, line);
+    fwprintf(MSVCRT_stderr, L"Assertion failed: %ls, file %ls, line %d\n\n", str, file, line);
 
   raise(SIGABRT);
   _exit(3);
@@ -461,9 +462,9 @@ void CDECL _register_thread_local_exe_atexit_callback(_tls_callback_type callbac
 /*********************************************************************
  *		_set_purecall_handler (MSVCR71.@)
  */
-MSVCRT_purecall_handler CDECL _set_purecall_handler(MSVCRT_purecall_handler function)
+_purecall_handler CDECL _set_purecall_handler(_purecall_handler function)
 {
-    MSVCRT_purecall_handler ret = purecall_handler;
+    _purecall_handler ret = purecall_handler;
 
     TRACE("(%p)\n", function);
     purecall_handler = function;
@@ -475,7 +476,7 @@ MSVCRT_purecall_handler CDECL _set_purecall_handler(MSVCRT_purecall_handler func
 /*********************************************************************
  *		_get_purecall_handler (MSVCR80.@)
  */
-MSVCRT_purecall_handler CDECL _get_purecall_handler(void)
+_purecall_handler CDECL _get_purecall_handler(void)
 {
     TRACE("\n");
     return purecall_handler;
@@ -510,7 +511,7 @@ int CDECL _set_error_mode(int mode)
 {
 
   const int old = MSVCRT_error_mode;
-  if ( MSVCRT__REPORT_ERRMODE != mode ) {
+  if ( _REPORT_ERRMODE != mode ) {
     MSVCRT_error_mode = mode;
   }
   return old;

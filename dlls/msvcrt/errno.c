@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <io.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
@@ -125,7 +126,7 @@ char *MSVCRT__sys_errlist[] =
 
 unsigned int MSVCRT__sys_nerr = ARRAY_SIZE(MSVCRT__sys_errlist) - 1;
 
-static MSVCRT_invalid_parameter_handler invalid_parameter_handler = NULL;
+static _invalid_parameter_handler invalid_parameter_handler = NULL;
 
 /* INTERNAL: Set the crt and dos errno's from the OS error given. */
 void msvcrt_set_errno(int err)
@@ -323,9 +324,9 @@ char* CDECL _strerror(const char* str)
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
 
     if (str && *str)
-        MSVCRT_sprintf( data->strerror_buffer, "%s: %s\n", str, MSVCRT__sys_errlist[err] );
+        sprintf( data->strerror_buffer, "%s: %s\n", str, MSVCRT__sys_errlist[err] );
     else
-        MSVCRT_sprintf( data->strerror_buffer, "%s\n", MSVCRT__sys_errlist[err] );
+        sprintf( data->strerror_buffer, "%s\n", MSVCRT__sys_errlist[err] );
 
     return data->strerror_buffer;
 }
@@ -340,11 +341,11 @@ void CDECL perror(const char* str)
 
     if (str && *str)
     {
-        MSVCRT__write( 2, str, strlen(str) );
-        MSVCRT__write( 2, ": ", 2 );
+        _write( 2, str, strlen(str) );
+        _write( 2, ": ", 2 );
     }
-    MSVCRT__write( 2, MSVCRT__sys_errlist[err], strlen(MSVCRT__sys_errlist[err]) );
-    MSVCRT__write( 2, "\n", 1 );
+    _write( 2, MSVCRT__sys_errlist[err], strlen(MSVCRT__sys_errlist[err]) );
+    _write( 2, "\n", 1 );
 }
 
 /*********************************************************************
@@ -357,12 +358,12 @@ void CDECL _wperror(const wchar_t* str)
 
     if (str && *str)
     {
-        size = MSVCRT_wcstombs(NULL, str, 0);
+        size = wcstombs(NULL, str, 0);
         if (size == -1) return;
         size++;
         buffer = malloc(size);
         if (!buffer) return;
-        if (MSVCRT_wcstombs(buffer, str, size) == -1)
+        if (wcstombs(buffer, str, size) == -1)
         {
             free(buffer);
             return;
@@ -410,7 +411,7 @@ int CDECL __wcserror_s(wchar_t* buffer, size_t nc, const wchar_t* str)
     if (err < 0 || err > MSVCRT__sys_nerr) err = MSVCRT__sys_nerr;
 
     len = MultiByteToWideChar(CP_ACP, 0, MSVCRT__sys_errlist[err], -1, NULL, 0) + 1 /* \n */;
-    if (str && *str) len += MSVCRT_wcslen(str) + 2 /* ': ' */;
+    if (str && *str) len += wcslen(str) + 2 /* ': ' */;
     if (len > nc)
     {
         MSVCRT_INVALID_PMT("buffer[nc] is too small", ERANGE);
@@ -422,7 +423,7 @@ int CDECL __wcserror_s(wchar_t* buffer, size_t nc, const wchar_t* str)
         lstrcatW(buffer, L": ");
     }
     else buffer[0] = '\0';
-    len = MSVCRT_wcslen(buffer);
+    len = wcslen(buffer);
     MultiByteToWideChar(CP_ACP, 0, MSVCRT__sys_errlist[err], -1, buffer + len, 256 - len);
     lstrcatW(buffer, L"\n");
 
@@ -502,7 +503,7 @@ void CDECL _invalid_parameter_noinfo_noreturn(void)
 /*********************************************************************
  * _get_invalid_parameter_handler (MSVCR80.@)
  */
-MSVCRT_invalid_parameter_handler CDECL _get_invalid_parameter_handler(void)
+_invalid_parameter_handler CDECL _get_invalid_parameter_handler(void)
 {
     TRACE("\n");
     return invalid_parameter_handler;
@@ -511,10 +512,10 @@ MSVCRT_invalid_parameter_handler CDECL _get_invalid_parameter_handler(void)
 /*********************************************************************
  * _set_invalid_parameter_handler (MSVCR80.@)
  */
-MSVCRT_invalid_parameter_handler CDECL _set_invalid_parameter_handler(
-        MSVCRT_invalid_parameter_handler handler)
+_invalid_parameter_handler CDECL _set_invalid_parameter_handler(
+        _invalid_parameter_handler handler)
 {
-    MSVCRT_invalid_parameter_handler old = invalid_parameter_handler;
+    _invalid_parameter_handler old = invalid_parameter_handler;
 
     TRACE("(%p)\n", handler);
 
@@ -529,7 +530,7 @@ MSVCRT_invalid_parameter_handler CDECL _set_invalid_parameter_handler(
 /*********************************************************************
  * _get_thread_local_invalid_parameter_handler (UCRTBASE.@)
  */
-MSVCRT_invalid_parameter_handler CDECL _get_thread_local_invalid_parameter_handler(void)
+_invalid_parameter_handler CDECL _get_thread_local_invalid_parameter_handler(void)
 {
     TRACE("\n");
     return msvcrt_get_thread_data()->invalid_parameter_handler;
@@ -538,11 +539,11 @@ MSVCRT_invalid_parameter_handler CDECL _get_thread_local_invalid_parameter_handl
 /*********************************************************************
  * _set_thread_local_invalid_parameter_handler (UCRTBASE.@)
  */
-MSVCRT_invalid_parameter_handler CDECL _set_thread_local_invalid_parameter_handler(
-        MSVCRT_invalid_parameter_handler handler)
+_invalid_parameter_handler CDECL _set_thread_local_invalid_parameter_handler(
+        _invalid_parameter_handler handler)
 {
     thread_data_t *data = msvcrt_get_thread_data();
-    MSVCRT_invalid_parameter_handler old = data->invalid_parameter_handler;
+    _invalid_parameter_handler old = data->invalid_parameter_handler;
 
     TRACE("(%p)\n", handler);
 
